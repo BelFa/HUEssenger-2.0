@@ -18,8 +18,6 @@ const decryptMessage = (cipherText, secretKey) => {
 };
 
 export default function ChatPage({ onNavigate, currentUser }) {
-  console.log("🔥 ChatPage рендер, пользователь:", currentUser?.username);
-
   const [activeChat, setActiveChat] = useState(null);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
@@ -28,6 +26,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const [waitingApproval, setWaitingApproval] = useState(false);
   const [incomingRequest, setIncomingRequest] = useState(null);
   const [rooms, setRooms] = useState([]);
+  const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, message: null });
 
   const wsRef = useRef(null);
   const activeChatRef = useRef(null);
@@ -35,7 +34,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
 
   const myNick = currentUser?.username || "Guest";
 
-  // Обновляем refs при изменении состояний
   useEffect(() => {
     activeChatRef.current = activeChat;
   }, [activeChat]);
@@ -44,20 +42,24 @@ export default function ChatPage({ onNavigate, currentUser }) {
     roomsRef.current = rooms;
   }, [rooms]);
 
-  // Загрузка списка комнат с логированием
+  // Закрытие контекстного меню при клике вне его
+  useEffect(() => {
+    const handleClick = () => {
+      setContextMenu({ visible: false, x: 0, y: 0, message: null });
+    };
+    window.addEventListener("click", handleClick);
+    return () => window.removeEventListener("click", handleClick);
+  }, []);
+
   const fetchRooms = useCallback(async () => {
-    console.log("🔄 fetchRooms вызван, user_id:", currentUser.id);
     try {
       const response = await fetch(`http://localhost:8080/my-rooms?user_id=${currentUser.id}`);
       if (response.ok) {
         const data = await response.json();
-        console.log("📋 Получены комнаты:", data);
         setRooms(data || []);
-      } else {
-        console.error("❌ Ошибка загрузки комнат, статус:", response.status);
       }
     } catch (err) {
-      console.error("❌ Ошибка загрузки списка комнат:", err);
+      console.error("Ошибка загрузки списка комнат:", err);
     }
   }, [currentUser.id]);
 
@@ -65,20 +67,20 @@ export default function ChatPage({ onNavigate, currentUser }) {
   useEffect(() => {
     if (activeChat) {
       const loadMessages = async () => {
-        console.log("📜 Загрузка истории для комнаты:", activeChat);
         try {
           const res = await fetch(`http://localhost:8080/messages?room_id=${activeChat}`);
           if (res.ok) {
             const data = await res.json();
             setMessages(data.map(m => ({
+              id: m.id,
               sender: m.sender,
               text: m.text,
-              isMe: m.sender === myNick
+              isMe: m.sender === myNick,
+              created_at: m.created_at
             })));
-            console.log(`✅ Загружено ${data.length} сообщений`);
           }
         } catch (err) {
-          console.error("❌ Ошибка загрузки истории:", err);
+          console.error("Ошибка загрузки истории:", err);
         }
       };
       loadMessages();
@@ -87,141 +89,194 @@ export default function ChatPage({ onNavigate, currentUser }) {
     }
   }, [activeChat, myNick]);
 
-  // WebSocket – с подробными логами и без зависимости от rooms
+  // WebSocket с автоматическим переподключением
   useEffect(() => {
-    console.log("🟢 WebSocket ЭФФЕКТ ЗАПУЩЕН (создание нового соединения)");
+    let reconnectAttempts = 0;
+    let reconnectTimeout = null;
+    let isMounted = true;
 
-    const ws = new WebSocket(`ws://localhost:8080/ws?user_id=${currentUser.id}&nick=${encodeURIComponent(myNick)}`);
-    wsRef.current = ws;
+    const connectWS = () => {
+      if (!isMounted) return;
+      
+      console.log("🟢 Подключение WebSocket...");
+      const ws = new WebSocket(`ws://localhost:8080/ws?user_id=${currentUser.id}&nick=${encodeURIComponent(myNick)}`);
+      wsRef.current = ws;
 
-    ws.onopen = () => {
-      console.log("✅ WebSocket соединение ОТКРЫТО");
-    };
+      ws.onopen = () => {
+        console.log("✅ WebSocket соединение открыто");
+        reconnectAttempts = 0;
+      };
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      console.log("📨 WS получено сообщение:", data);
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        console.log("📨 WS Data:", data);
 
-      if (data.type === "message") {
-        const currentRoomId = activeChatRef.current;
-        const currentRooms = roomsRef.current;
-        const currentRoom = currentRooms.find(r => r.id === currentRoomId);
-        if (currentRoom && (data.code === currentRoom.code || data.room_id === currentRoomId)) {
-          console.log(`💬 Новое сообщение в активный чат от ${data.sender}`);
-          setMessages(prev => [...prev, {
-            sender: data.sender,
-            text: data.text,
-            isMe: data.sender === myNick
-          }]);
-        } else {
-          console.log("⏸ Сообщение не для активного чата, проигнорировано");
+        if (data.type === "message") {
+          const currentRoomId = activeChatRef.current;
+          const currentRooms = roomsRef.current;
+          const currentRoom = currentRooms.find(r => r.id === currentRoomId);
+          if (currentRoom && (data.code === currentRoom.code || data.room_id === currentRoomId)) {
+            setMessages(prev => {
+              const exists = prev.some(m => m.text === data.text && m.sender === data.sender && m.created_at === data.created_at);
+              if (exists) return prev;
+              return [...prev, {
+                id: data.id,
+                sender: data.sender,
+                text: data.text,
+                isMe: data.sender === myNick,
+                created_at: data.created_at
+              }];
+            });
+          }
         }
-      }
 
-      if (data.type === "delete_message") {
-        setMessages(prev => prev.filter(m => 
-          !(m.sender === data.sender && m.text === data.text)
-        ));
-      }
+        if (data.type === "delete_message_for_all") {
+          // Удаляем сообщение у всех
+          setMessages(prev => prev.filter(m => !(m.id === data.message_id || (m.text === data.text && m.sender === data.sender))));
+        }
 
-      if (data.type === "incoming_request") {
-        console.log("🔔 Входящий запрос на вступление от:", data.requester_nick);
-        setIncomingRequest({
-          type: "request",
-          userId: data.requester_id,
-          username: data.requester_nick,
-          code: data.code,
-          timeLeft: 30
-        });
-      }
+        if (data.type === "delete_message_for_me") {
+          // Удаляем сообщение только у себя
+          setMessages(prev => prev.filter(m => !(m.id === data.message_id || (m.text === data.text && m.sender === data.sender))));
+        }
 
-      if (data.type === "incoming_invite") {
-        console.log("📩 Получено приглашение от:", data.sender_nick, "в комнату", data.room_code);
-        fetchRooms(); // обновляем список
-        setIncomingRequest({
-          type: "invite",
-          username: data.sender_nick,
-          code: data.room_code,
-          timeLeft: 30
-        });
-      }
+        if (data.type === "incoming_request") {
+          setIncomingRequest({
+            type: "request",
+            userId: data.requester_id,
+            username: data.requester_nick,
+            code: data.code,
+            timeLeft: 30
+          });
+        }
 
-      if (data.type === "join_approved") {
-        console.log("✅ Запрос/приглашение ОДОБРЕНО для комнаты", data.code);
-        setWaitingApproval(false);
-        fetchRooms();
-        alert(`✅ Доступ разрешён в комнату: ${data.code}`);
-      }
+        if (data.type === "incoming_invite") {
+          fetchRooms();
+          setIncomingRequest({
+            type: "invite",
+            username: data.sender_nick,
+            code: data.room_code,
+            timeLeft: 30
+          });
+        }
 
-      if (data.type === "join_rejected") {
-        console.log("❌ Запрос/приглашение ОТКЛОНЕНО");
-        setWaitingApproval(false);
-        alert("❌ В доступе отказано.");
-      }
+        if (data.type === "join_approved") {
+          setWaitingApproval(false);
+          fetchRooms();
+          alert(`✅ Доступ разрешён в комнату: ${data.code}`);
+        }
 
-      if (data.type === "error") {
-        console.error("❌ Ошибка от сервера:", data.message);
-        alert("Ошибка: " + data.message);
-      }
+        if (data.type === "join_rejected") {
+          setWaitingApproval(false);
+          alert("❌ В доступе отказано.");
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("❌ WebSocket ошибка:", err);
+      };
+
+      ws.onclose = (event) => {
+        console.log(`❌ WebSocket закрыт, код: ${event.code}`);
+        if (isMounted && reconnectAttempts < 10) {
+          reconnectTimeout = setTimeout(() => {
+            reconnectAttempts++;
+            console.log(`🔄 Попытка переподключения ${reconnectAttempts}/10...`);
+            connectWS();
+          }, 3000);
+        }
+      };
     };
 
-    ws.onerror = (err) => {
-      console.error("❌ WebSocket ошибка:", err);
-    };
-
-    ws.onclose = (event) => {
-      console.log(`❌ WebSocket ЗАКРЫТ, код: ${event.code}, причина: ${event.reason || "нет"}`);
-    };
+    connectWS();
 
     return () => {
-      console.log("🔴 WebSocket ЭФФЕКТ ЗАВЕРШЁН, закрываю соединение");
+      isMounted = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.close();
       }
     };
-  }, [currentUser.id, myNick]); // ТОЛЬКО эти зависимости (без fetchRooms и rooms)
+  }, [currentUser.id, myNick, fetchRooms]);
 
-  // Отдельный эффект для первоначальной загрузки комнат (один раз)
+  // Отдельный эффект для загрузки комнат при старте
   useEffect(() => {
     fetchRooms();
-  }, []); // пустой массив – вызывается только при монтировании
+  }, []);
 
-  // Отправка сообщения
   const send = () => {
-  if (!input.trim() || !wsRef.current || !activeChat) return;
+    if (!input.trim() || !wsRef.current || !activeChat) return;
 
-  const activeRoom = rooms.find(c => c.id === activeChat);
-  if (!activeRoom) {
-    alert("Комната не найдена");
-    return;
-  }
-
-  const encryptedText = encryptMessage(input, activeRoom.code);
-
-  wsRef.current.send(JSON.stringify({
-    type: "message",
-    code: activeRoom.code,
-    text: encryptedText,
-    sender: myNick,
-    message_type: "text"
-  }));
-
-  setInput("");
-};
-
-  const deleteMessage = (msgToDelete) => {
-    if (!wsRef.current) return;
     const activeRoom = rooms.find(c => c.id === activeChat);
+    if (!activeRoom) {
+      alert("Комната не найдена");
+      return;
+    }
+
+    const encryptedText = encryptMessage(input, activeRoom.code);
+    const now = new Date();
+    const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+
+    // Добавляем локально, чтобы отправитель видел сообщение сразу
+    setMessages(prev => [...prev, {
+      id: Date.now(),
+      sender: myNick,
+      text: encryptedText,
+      isMe: true,
+      created_at: timeStr
+    }]);
+
     wsRef.current.send(JSON.stringify({
-      type: "delete_message",
-      code: activeRoom?.code,
-      room_id: activeChat,
-      sender: msgToDelete.sender,
-      text: msgToDelete.text
+      type: "message",
+      code: activeRoom.code,
+      text: encryptedText,
+      sender: myNick,
+      message_type: "text"
     }));
-    setMessages(prev => prev.filter(m => 
-      !(m.sender === msgToDelete.sender && m.text === msgToDelete.text)
-    ));
+
+    setInput("");
+  };
+
+  const handleContextMenu = (e, message) => {
+    e.preventDefault();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      message: message
+    });
+  };
+
+  const handleDeleteMessage = (message, deleteForAll) => {
+    if (!wsRef.current || !activeChat) return;
+
+    const activeRoom = rooms.find(c => c.id === activeChat);
+    
+    if (deleteForAll && message.isMe) {
+      // Удаляем для всех (только если своё сообщение)
+      wsRef.current.send(JSON.stringify({
+        type: "delete_message_for_all",
+        code: activeRoom?.code,
+        message_id: message.id,
+        text: message.text,
+        sender: message.sender
+      }));
+      // Локально удаляем сразу
+      setMessages(prev => prev.filter(m => m !== message));
+    } else {
+      // Удаляем только у себя
+      wsRef.current.send(JSON.stringify({
+        type: "delete_message_for_me",
+        code: activeRoom?.code,
+        message_id: message.id,
+        text: message.text,
+        sender: message.sender
+      }));
+      // Локально удаляем сразу
+      setMessages(prev => prev.filter(m => m !== message));
+    }
+
+    setContextMenu({ visible: false, x: 0, y: 0, message: null });
   };
 
   const handleCreateRoom = async () => {
@@ -229,7 +284,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     if (!targetUser) return alert("Введите ник пользователя");
 
     const generatedCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-    console.log("🏠 Создание комнаты, код:", generatedCode, "приглашаемый:", targetUser);
 
     try {
       const response = await fetch("http://localhost:8080/create", {
@@ -245,17 +299,14 @@ export default function ChatPage({ onNavigate, currentUser }) {
       if (response.ok) {
         alert(`✅ Комната создана!\nКод: ${generatedCode}`);
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          console.log("📤 Отправка invite через WebSocket");
           wsRef.current.send(JSON.stringify({
             type: "invite",
             target_nick: targetUser,
             code: generatedCode
           }));
-        } else {
-          console.warn("⚠️ WebSocket не открыт, invite не отправлен");
         }
         setInviteNick("");
-        fetchRooms(); // обновляем список комнат
+        fetchRooms();
       } else {
         alert("Не удалось создать комнату");
       }
@@ -268,7 +319,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const handleJoinRoom = () => {
     const code = joinCode.trim();
     if (!code || !wsRef.current) return;
-    console.log("🔑 Запрос на вступление в комнату с кодом:", code);
     wsRef.current.send(JSON.stringify({ type: "join_request", code }));
     setWaitingApproval(true);
     setTimeout(() => {
@@ -283,7 +333,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     if (!wsRef.current || !incomingRequest) return;
 
     if (incomingRequest.type === "request") {
-      console.log("✏️ Ответ на запрос входа:", isApproved ? "одобрено" : "отклонено");
       wsRef.current.send(JSON.stringify({
         type: isApproved ? "approve_join" : "reject_join",
         requester_id: incomingRequest.userId,
@@ -291,7 +340,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
       }));
     } else if (incomingRequest.type === "invite") {
       if (isApproved) {
-        console.log("📤 Sending accept_invite for code:", incomingRequest.code);
         wsRef.current.send(JSON.stringify({
           type: "accept_invite",
           code: incomingRequest.code
@@ -319,7 +367,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     }
   };
 
-  // Таймер для модалки уведомления
   useEffect(() => {
     let timer;
     if (incomingRequest && incomingRequest.timeLeft > 0) {
@@ -394,21 +441,29 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 </div>
                 <span className="text-sm opacity-70">🔒 E2EE Активно</span>
               </div>
-              <div className="flex-1 p-4 overflow-y-auto bg-black/10 flex flex-col">
+
+              {/* Список сообщений */}
+              <div className="flex-1 p-4 overflow-y-auto bg-black/10 flex flex-col space-y-3">
                 {messages.map((m, i) => (
-                  <div key={i} className={`mb-3 flex flex-col ${m.isMe ? "items-end" : "items-start"}`}>
-                    <span className="text-[10px] opacity-50 mb-1 px-2">{m.sender}</span>
-                    <div className="flex items-center gap-2">
-                      <span className={`px-4 py-2 rounded-2xl max-w-[70%] break-words ${m.isMe ? "bg-indigo-500" : "bg-white/20"}`}>
+                  <div 
+                    key={i} 
+                    className={`flex flex-col ${m.isMe ? "items-end" : "items-start"}`}
+                    onContextMenu={(e) => handleContextMenu(e, m)}
+                  >
+                    <span className="text-sm font-semibold opacity-80 mb-1 px-2">{m.sender}</span>
+                    <div className={`max-w-[70%] px-4 py-2 rounded-2xl ${m.isMe ? "bg-indigo-500" : "bg-white/20"} cursor-context-menu`}>
+                      <div className="break-words whitespace-pre-wrap">
                         {decryptMessage(m.text, currentRoomCode)}
-                      </span>
-                      {m.isMe && (
-                        <button onClick={() => deleteMessage(m)} className="text-red-400 hover:text-red-600 text-xs mt-1">✕</button>
-                      )}
+                      </div>
+                      <div className="text-[9px] opacity-50 text-right mt-1">
+                        {m.created_at || "—"}
+                      </div>
                     </div>
                   </div>
                 ))}
               </div>
+
+              {/* Поле ввода */}
               <div className="p-4 bg-white/5 backdrop-blur-xl border-t border-white/20 flex gap-3">
                 <input className="flex-1 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
                   value={input} onChange={(e) => setInput(e.target.value)}
@@ -418,6 +473,38 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 </button>
               </div>
             </>
+          )}
+
+          {/* Контекстное меню */}
+          {contextMenu.visible && (
+            <div 
+              className="fixed bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 overflow-hidden"
+              style={{ top: contextMenu.y, left: contextMenu.x }}
+            >
+              {contextMenu.message?.isMe ? (
+                <>
+                  <button 
+                    onClick={() => handleDeleteMessage(contextMenu.message, true)}
+                    className="block w-full px-4 py-2 text-left text-red-400 hover:bg-red-500/20 transition text-sm"
+                  >
+                    🗑 Удалить для всех
+                  </button>
+                  <button 
+                    onClick={() => handleDeleteMessage(contextMenu.message, false)}
+                    className="block w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 transition text-sm"
+                  >
+                    ❌ Удалить только у себя
+                  </button>
+                </>
+              ) : (
+                <button 
+                  onClick={() => handleDeleteMessage(contextMenu.message, false)}
+                  className="block w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 transition text-sm"
+                >
+                  ❌ Скрыть сообщение
+                </button>
+              )}
+            </div>
           )}
 
           {/* Модалка ожидания */}

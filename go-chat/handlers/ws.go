@@ -30,6 +30,7 @@ type WSMessage struct {
 	MessageType   string `json:"message_type,omitempty"`
 	Sender        string `json:"sender,omitempty"`
 	SenderID      string `json:"sender_id,omitempty"`
+	MessageID     int    `json:"message_id,omitempty"`
 }
 
 func ServeWS(w http.ResponseWriter, r *http.Request) {
@@ -86,6 +87,10 @@ func ServeWS(w http.ResponseWriter, r *http.Request) {
 			handleNewMessage(userID, userNick, msg)
 		case "accept_invite":
 			handleAcceptInvite(msg.Code, userNick)
+		case "delete_message_for_all":
+			handleDeleteMessageForAll(msg.Code, msg.MessageID, msg.Text, msg.Sender)
+		case "delete_message_for_me":
+			handleDeleteMessageForMe(msg.Code, msg.MessageID, msg.Text, msg.Sender)
 		}
 
 	}
@@ -100,7 +105,7 @@ func handleNewMessage(senderID, senderNick string, msg WSMessage) {
 		return
 	}
 
-	// Сохраняем сообщение в БД (как в первой версии)
+	// Сохраняем сообщение в БД
 	_, err = database.DB.Exec(`
 		INSERT INTO messages (room_id, sender_id, sender_nick, content, message_type, file_path)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -108,6 +113,18 @@ func handleNewMessage(senderID, senderNick string, msg WSMessage) {
 	if err != nil {
 		log.Println("ERROR: failed to save message:", err)
 		return
+	}
+
+	// Получаем created_at сохранённого сообщения
+	var createdAt time.Time
+	err = database.DB.QueryRow(`
+		SELECT created_at FROM messages 
+		WHERE room_id = $1 AND sender_id = $2 AND content = $3 
+		ORDER BY id DESC LIMIT 1
+	`, roomID, senderID, msg.Text).Scan(&createdAt)
+	if err != nil {
+		log.Println("WARNING: failed to get created_at:", err)
+		createdAt = time.Now() // fallback
 	}
 
 	// Получаем всех участников комнаты
@@ -123,16 +140,18 @@ func handleNewMessage(senderID, senderNick string, msg WSMessage) {
 
 	mu.Lock()
 	defer mu.Unlock()
+
 	for rows.Next() {
 		var nick string
 		rows.Scan(&nick)
 		if conn, ok := clients[nick]; ok {
 			err := conn.WriteJSON(map[string]interface{}{
-				"type":    "message",
-				"room_id": roomID,
-				"sender":  senderNick,
-				"text":    msg.Text,
-				"code":    msg.Code,
+				"type":       "message",
+				"room_id":    roomID,
+				"sender":     senderNick,
+				"text":       msg.Text,
+				"code":       msg.Code,
+				"created_at": createdAt.Format("15:04"),
 			})
 			if err != nil {
 				log.Printf("ERROR: could not send to %s: %v", nick, err)
@@ -282,4 +301,45 @@ func sendToUser(nick string, data interface{}) {
 	if ok {
 		conn.WriteJSON(data)
 	}
+}
+
+func handleDeleteMessageForAll(roomCode string, messageID int, text, sender string) {
+	var roomID int
+	database.DB.QueryRow("SELECT id FROM rooms WHERE code = $1", roomCode).Scan(&roomID)
+
+	// Удаляем из БД
+	database.DB.Exec("DELETE FROM messages WHERE room_id = $1 AND content = $2 AND sender_nick = $3",
+		roomID, text, sender)
+
+	// Рассылаем всем участникам
+	rows, _ := database.DB.Query(`
+        SELECT u.username FROM room_participants rp 
+        JOIN users u ON rp.user_id = u.id 
+        WHERE rp.room_id = $1`, roomID)
+	defer rows.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for rows.Next() {
+		var nick string
+		rows.Scan(&nick)
+		if conn, ok := clients[nick]; ok {
+			conn.WriteJSON(map[string]interface{}{
+				"type":       "delete_message_for_all",
+				"message_id": messageID,
+				"text":       text,
+				"sender":     sender,
+			})
+		}
+	}
+}
+
+func handleDeleteMessageForMe(roomCode string, messageID int, text, sender string) {
+	// Отправляем только запросившему
+	sendToUser(sender, map[string]interface{}{
+		"type":       "delete_message_for_me",
+		"message_id": messageID,
+		"text":       text,
+		"sender":     sender,
+	})
 }

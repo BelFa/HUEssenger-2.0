@@ -375,7 +375,7 @@ func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := r.URL.Query().Get("room_id")
 
 	rows, err := database.DB.Query(`
-		SELECT u.username, m.content, m.file_path, m.message_type 
+		SELECT u.username, m.content, m.file_path, m.message_type, m.created_at
 		FROM messages m
 		JOIN users u ON m.sender_id = u.id
 		WHERE m.room_id = $1 
@@ -391,13 +391,15 @@ func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var nick, text string
 		var filePath, msgType interface{}
-		rows.Scan(&nick, &text, &filePath, &msgType)
+		var createdAt time.Time
+		rows.Scan(&nick, &text, &filePath, &msgType, &createdAt)
 
 		msgs = append(msgs, map[string]interface{}{
 			"sender":       nick,
 			"text":         text,
 			"file_path":    filePath,
 			"message_type": msgType,
+			"created_at":   createdAt.Format("15:04"), // формат HH:MM
 		})
 	}
 
