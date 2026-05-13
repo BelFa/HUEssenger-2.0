@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"database/sql"
 	"log"
 	"net/http"
 	"sync"
@@ -12,21 +11,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// --- WS config ---
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// user_id -> conn
 var clients = make(map[string]*websocket.Conn)
 var mu sync.Mutex
+var pendingRequests = sync.Map{}
 
-// pending requests
-var pendingRequests sync.Map // code_userId -> bool
-
-// --- message struct ---
 type WSMessage struct {
 	Type          string `json:"type"`
 	Code          string `json:"code,omitempty"`
@@ -34,11 +26,12 @@ type WSMessage struct {
 	RequesterNick string `json:"requester_nick,omitempty"`
 	TargetNick    string `json:"target_nick,omitempty"`
 	Text          string `json:"text,omitempty"`
-	FilePath      string `json:"file_path,omitempty"`    // Путь к картинке
-	MessageType   string `json:"message_type,omitempty"` // 'text' или 'image'
+	FilePath      string `json:"file_path,omitempty"`
+	MessageType   string `json:"message_type,omitempty"`
+	Sender        string `json:"sender,omitempty"`
+	SenderID      string `json:"sender_id,omitempty"`
 }
 
-// --- WS handler ---
 func ServeWS(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	userNick := r.URL.Query().Get("nick")
@@ -54,26 +47,18 @@ func ServeWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// register client
 	mu.Lock()
-	clients[userID] = conn
+	clients[userNick] = conn
 	mu.Unlock()
 
-	log.Println("=================================")
-	log.Println("CONNECTED")
-	log.Println("userID:", userID, "nick:", userNick)
-
-	printClients()
+	log.Printf("✅ CONNECTED: %s (id: %s)", userNick, userID)
 
 	defer func() {
 		mu.Lock()
-		delete(clients, userID)
+		delete(clients, userNick)
 		mu.Unlock()
-
 		conn.Close()
-
-		log.Println("DISCONNECTED:", userID)
-		printClients()
+		log.Printf("❌ DISCONNECTED: %s", userNick)
 	}()
 
 	for {
@@ -84,37 +69,81 @@ func ServeWS(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
-		log.Println("RECEIVED:", msg)
+		log.Printf("📥 WS message: %+v", msg)
 
 		switch msg.Type {
-
 		case "join_request":
 			handleJoinRequest(userID, userNick, msg.Code)
-
 		case "approve_join":
-			handleDecision(userID, msg.Code, msg.RequesterID, true)
-
+			handleDecision(msg.Code, msg.RequesterID, msg.RequesterNick, true)
 		case "reject_join":
-			handleDecision(userID, msg.Code, msg.RequesterID, false)
-
-		case "invite": // ← Добавили
+			handleDecision(msg.Code, msg.RequesterID, msg.RequesterNick, false)
+		case "invite":
 			handleInvite(msg.TargetNick, msg.Code, userNick)
-
 		case "new_message":
 			handleNewMessage(userID, userNick, msg)
+		case "message":
+			handleNewMessage(userID, userNick, msg)
+		case "accept_invite":
+			handleAcceptInvite(msg.Code, userNick)
 		}
+
 	}
 }
 
-// 🔵 JOIN REQUEST
+// ✅ ИСПРАВЛЕННАЯ handleNewMessage (из первой версии)
+func handleNewMessage(senderID, senderNick string, msg WSMessage) {
+	var roomID int
+	err := database.DB.QueryRow("SELECT id FROM rooms WHERE code = $1", msg.Code).Scan(&roomID)
+	if err != nil {
+		log.Println("ERROR: room not found:", msg.Code)
+		return
+	}
+
+	// Сохраняем сообщение в БД (как в первой версии)
+	_, err = database.DB.Exec(`
+		INSERT INTO messages (room_id, sender_id, sender_nick, content, message_type, file_path)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		roomID, senderID, senderNick, msg.Text, msg.MessageType, msg.FilePath)
+	if err != nil {
+		log.Println("ERROR: failed to save message:", err)
+		return
+	}
+
+	// Получаем всех участников комнаты
+	rows, err := database.DB.Query(`
+		SELECT u.username FROM room_participants rp 
+		JOIN users u ON rp.user_id = u.id 
+		WHERE rp.room_id = $1`, roomID)
+	if err != nil {
+		log.Println("ERROR: failed to get participants:", err)
+		return
+	}
+	defer rows.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	for rows.Next() {
+		var nick string
+		rows.Scan(&nick)
+		if conn, ok := clients[nick]; ok {
+			err := conn.WriteJSON(map[string]interface{}{
+				"type":    "message",
+				"room_id": roomID,
+				"sender":  senderNick,
+				"text":    msg.Text,
+				"code":    msg.Code,
+			})
+			if err != nil {
+				log.Printf("ERROR: could not send to %s: %v", nick, err)
+			}
+		}
+	}
+	log.Printf("✅ Message from %s sent to room %d", senderNick, roomID)
+}
+
+// ✅ ИСПРАВЛЕННЫЙ handleJoinRequest (из первой версии)
 func handleJoinRequest(requesterID, requesterNick, code string) {
-	log.Println("=================================")
-	log.Println("JOIN REQUEST")
-	log.Println("from:", requesterID, requesterNick)
-	log.Println("room code:", code)
-
-	printClients()
-
 	var creatorID string
 	var creatorNick string
 
@@ -126,228 +155,131 @@ func handleJoinRequest(requesterID, requesterNick, code string) {
 	`, code).Scan(&creatorID, &creatorNick)
 
 	if err != nil {
-		if err == sql.ErrNoRows {
-			log.Println("ERROR: room not found")
-		} else {
-			log.Println("ERROR: DB query failed:", err)
-		}
-
-		sendToUser(requesterID, map[string]string{
-			"type":    "error",
-			"message": "Room not found",
-		})
+		sendToUser(requesterNick, map[string]string{"type": "error", "message": "Room not found"})
 		return
 	}
-
-	log.Println("ROOM CREATOR:")
-	log.Println("creatorID:", creatorID)
-	log.Println("creatorNick:", creatorNick)
 
 	requestKey := code + "_" + requesterID
 	pendingRequests.Store(requestKey, true)
 
 	mu.Lock()
-	creatorConn, ok := clients[creatorID]
+	creatorConn, ok := clients[creatorNick]
 	mu.Unlock()
 
 	if !ok {
-		log.Println("ERROR: creator is NOT online")
-		sendToUser(requesterID, map[string]string{
-			"type":    "error",
-			"message": "Creator is not online",
-		})
+		sendToUser(requesterNick, map[string]string{"type": "error", "message": "Creator is offline"})
 		return
 	}
 
-	log.Println("SENDING incoming_request to creator")
-
-	err = creatorConn.WriteJSON(map[string]interface{}{
+	creatorConn.WriteJSON(map[string]interface{}{
 		"type":           "incoming_request",
 		"requester_id":   requesterID,
 		"requester_nick": requesterNick,
 		"code":           code,
 	})
 
-	if err != nil {
-		log.Println("ERROR: failed to send message:", err)
-		return
-	}
-
-	log.Println("STARTED 30s TIMEOUT")
-
 	time.AfterFunc(30*time.Second, func() {
 		if _, exists := pendingRequests.Load(requestKey); exists {
-			log.Println("TIMEOUT reached for:", requesterID)
-
 			pendingRequests.Delete(requestKey)
-
-			sendToUser(requesterID, map[string]string{
-				"type":   "join_rejected",
-				"reason": "timeout",
-			})
+			sendToUser(requesterNick, map[string]string{"type": "join_rejected", "reason": "timeout"})
 		}
 	})
 }
 
-// 🟢 APPROVE / REJECT
-func handleDecision(creatorID, code, requesterID string, approved bool) {
-	log.Println("=================================")
-	log.Println("DECISION")
-	log.Println("creatorID:", creatorID)
-	log.Println("requesterID:", requesterID)
-	log.Println("approved:", approved)
-
+// ✅ ИСПРАВЛЕННАЯ handleDecision
+func handleDecision(code, requesterID, requesterNick string, approved bool) {
 	requestKey := code + "_" + requesterID
 	pendingRequests.Delete(requestKey)
 
 	mu.Lock()
-	reqConn, ok := clients[requesterID]
+	reqConn, ok := clients[requesterNick]
 	mu.Unlock()
 
-	if !ok {
-		log.Println("ERROR: requester not online")
-		return
-	}
-
 	if approved {
-		log.Println("APPROVED")
-
+		// Добавляем пользователя в комнату
 		_, err := database.DB.Exec(`
 			INSERT INTO room_participants (room_id, user_id)
 			SELECT id, $2 FROM rooms WHERE code = $1
+			ON CONFLICT DO NOTHING
 		`, code, requesterID)
 
 		if err != nil {
-			log.Println("ERROR: DB insert failed:", err)
-			return
+			log.Println("ERROR: failed to add participant:", err)
 		}
 
-		reqConn.WriteJSON(map[string]string{
-			"type": "join_approved",
-			"code": code,
-		})
-
+		if ok {
+			reqConn.WriteJSON(map[string]string{"type": "join_approved", "code": code})
+		}
 	} else {
-		log.Println("REJECTED")
-
-		reqConn.WriteJSON(map[string]string{
-			"type":   "join_rejected",
-			"reason": "denied",
-		})
-	}
-}
-
-// 🟡 helper
-func sendToUser(userID string, data interface{}) {
-	mu.Lock()
-	conn, ok := clients[userID]
-	mu.Unlock()
-
-	if !ok {
-		log.Println("ERROR: sendToUser -> user not found:", userID)
-		return
-	}
-
-	err := conn.WriteJSON(data)
-	if err != nil {
-		log.Println("ERROR: sendToUser failed:", err)
-	}
-}
-
-// 🧪 print clients
-func printClients() {
-	log.Println("=== ACTIVE CLIENTS ===")
-
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(clients) == 0 {
-		log.Println("no active clients")
-		return
-	}
-
-	for id := range clients {
-		log.Println("client:", id)
-	}
-}
-func handleNewMessage(senderID, senderNick string, msg WSMessage) {
-	// 1. Сохраняем в базу данных
-	// Ищем ID комнаты по её коду
-	var roomID int
-	err := database.DB.QueryRow("SELECT id FROM rooms WHERE code = $1", msg.Code).Scan(&roomID)
-	if err != nil {
-		log.Println("ERROR: room not found for message:", msg.Code)
-		return
-	}
-
-	// Записываем сообщение в таблицу messages (те самые новые столбцы)
-	_, err = database.DB.Exec(`
-        INSERT INTO messages (room_id, sender_id, content, file_path, message_type)
-        VALUES ($1, $2, $3, $4, $5)`,
-		roomID, senderID, msg.Text, msg.FilePath, msg.MessageType)
-
-	if err != nil {
-		log.Println("ERROR: failed to save message to DB:", err)
-		return
-	}
-
-	// 2. Рассылаем сообщение всем активным клиентам
-	mu.Lock()
-	defer mu.Unlock()
-	for id, conn := range clients {
-		err := conn.WriteJSON(map[string]interface{}{
-			"type":         "broadcast_message",
-			"sender":       senderNick,
-			"text":         msg.Text,
-			"file_path":    msg.FilePath,
-			"message_type": msg.MessageType,
-			"code":         msg.Code,
-		})
-		if err != nil {
-			log.Printf("ERROR: could not send to %s: %v", id, err)
+		if ok {
+			reqConn.WriteJSON(map[string]string{"type": "join_rejected", "reason": "denied"})
 		}
 	}
-} // ←←←← ЭТУ СКОБКУ НЕ ХВАТАЛО!
+}
 
-// ====================== ИНВАЙТ (ПРИГЛАШЕНИЕ) ======================
+// ✅ ИСПРАВЛЕННЫЙ handleInvite (из первой версии)
 func handleInvite(targetNick string, roomCode string, senderNick string) {
 	mu.Lock()
 	targetConn, isOnline := clients[targetNick]
 	mu.Unlock()
 
-	log.Printf("📨 Приглашение от %s → %s | код: %s", senderNick, targetNick, roomCode)
-
-	// Находим ID комнаты
-	var roomID int
-	err := database.DB.QueryRow("SELECT id FROM rooms WHERE code = $1", roomCode).Scan(&roomID)
-	if err != nil {
-		log.Println("❌ Комната не найдена при инвайте:", roomCode)
-		return
-	}
-
-	// Добавляем приглашённого в участники
-	_, err = database.DB.Exec(`
-		INSERT INTO room_participants (room_id, user_id)
-		SELECT $1, id FROM users WHERE username = $2 
-		ON CONFLICT DO NOTHING`, roomID, targetNick)
-
-	if err != nil {
-		log.Println("⚠️ Ошибка добавления участника:", err)
-	}
-
-	// Отправляем уведомление
 	if isOnline {
-		err = targetConn.WriteJSON(map[string]interface{}{
+		targetConn.WriteJSON(map[string]interface{}{
 			"type":        "incoming_invite",
 			"room_code":   roomCode,
 			"sender_nick": senderNick,
 		})
-		if err != nil {
-			log.Println("Ошибка отправки инвайта:", err)
-		} else {
-			log.Printf("✅ Инвайт успешно отправлен %s", targetNick)
-		}
 	} else {
-		log.Printf("ℹ️ %s не в сети", targetNick)
+		log.Printf("Пользователь %s не в сети, инвайт не отправлен", targetNick)
+	}
+}
+
+func handleAcceptInvite(roomCode, acceptingNick string) {
+	log.Printf("🔍 accept_invite: code=%s, nick=%s", roomCode, acceptingNick)
+
+	var roomID int
+	err := database.DB.QueryRow("SELECT id FROM rooms WHERE code = $1", roomCode).Scan(&roomID)
+	if err != nil {
+		log.Printf("❌ Комната с кодом %s не найдена: %v", roomCode, err)
+		sendToUser(acceptingNick, map[string]string{
+			"type":    "error",
+			"message": "Комната не найдена",
+		})
+		return
+	}
+
+	// Добавляем пользователя в участники
+	res, err := database.DB.Exec(`
+        INSERT INTO room_participants (room_id, user_id)
+        SELECT $1, id FROM users WHERE username = $2
+        ON CONFLICT DO NOTHING
+    `, roomID, acceptingNick)
+	if err != nil {
+		log.Printf("❌ Ошибка добавления участника: %v", err)
+		sendToUser(acceptingNick, map[string]string{
+			"type":    "error",
+			"message": "Ошибка сервера",
+		})
+		return
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	log.Printf("✅ Участник %s добавлен в комнату %d (rows: %d)", acceptingNick, roomID, rowsAffected)
+
+	// Отправляем подтверждение
+	sendToUser(acceptingNick, map[string]interface{}{
+		"type": "join_approved",
+		"code": roomCode,
+	})
+}
+
+// ✅ Хелпер для отправки сообщения по нику
+func sendToUser(nick string, data interface{}) {
+	mu.Lock()
+	conn, ok := clients[nick]
+	mu.Unlock()
+
+	if ok {
+		conn.WriteJSON(data)
 	}
 }

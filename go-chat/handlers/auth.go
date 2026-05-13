@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"go-chat/database"
 	"log"
 	"math/rand"
 	"net/http"
@@ -14,8 +15,6 @@ import (
 	"regexp"
 	"time"
 	"unicode/utf8"
-
-	"go-chat/database"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -43,6 +42,12 @@ type RoomResponse struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
 	Code string `json:"code"`
+}
+
+type CreateRoomReq struct {
+	CreatorID   int    `json:"creator_id"`
+	InvitedNick string `json:"invited_nick"`
+	Code        string `json:"code"`
 }
 
 // Инициализация рандома
@@ -86,6 +91,25 @@ func decryptData(encrypted string) string {
 	return string(plaintext)
 }
 
+// ====================== ЛОГИН (ОБНОВЛЕНО) ======================
+func LoginHandler(w http.ResponseWriter, r *http.Request) {
+	var req AuthRequest
+	json.NewDecoder(r.Body).Decode(&req)
+
+	var user UserResponse
+	var hash string
+	err := database.DB.QueryRow("SELECT id, username, password_hash FROM users WHERE username = $1", req.Username).
+		Scan(&user.ID, &user.Username, &hash)
+
+	if err != nil || bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil {
+		http.Error(w, "Неверные данные", http.StatusUnauthorized)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
+}
+
 // ====================== РЕГИСТРАЦИЯ ======================
 func generateVerificationCode() string {
 	return fmt.Sprintf("%06d", rand.Intn(1000000))
@@ -98,7 +122,6 @@ func SendVerificationCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация пароля
 	if utf8.RuneCountInString(req.Password) < 6 {
 		http.Error(w, "Пароль слишком короткий (минимум 6 символов)", http.StatusBadRequest)
 		return
@@ -110,7 +133,6 @@ func SendVerificationCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверка занятости
 	var exists int
 	database.DB.QueryRow("SELECT 1 FROM users WHERE username = $1", req.Username).Scan(&exists)
 	if exists == 1 {
@@ -135,13 +157,13 @@ func SendVerificationCode(w http.ResponseWriter, r *http.Request) {
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	_, err = database.DB.Exec(`
-		INSERT INTO pending_registrations (username, email, password_hash, verification_code, expires_at)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (username) DO UPDATE 
-		SET email = EXCLUDED.email, 
-		    password_hash = EXCLUDED.password_hash,
-		    verification_code = EXCLUDED.verification_code, 
-		    expires_at = EXCLUDED.expires_at`,
+        INSERT INTO pending_registrations (username, email, password_hash, verification_code, expires_at)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (username) DO UPDATE 
+        SET email = EXCLUDED.email, 
+            password_hash = EXCLUDED.password_hash,
+            verification_code = EXCLUDED.verification_code, 
+            expires_at = EXCLUDED.expires_at`,
 		req.Username, encryptedEmail, string(hashedPassword), code, expiresAt)
 
 	if err != nil {
@@ -167,9 +189,9 @@ func ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
 	var encryptedEmail, passwordHash string
 
 	err := database.DB.QueryRow(`
-		SELECT id, email, password_hash 
-		FROM pending_registrations 
-		WHERE username = $1 AND verification_code = $2 AND expires_at > NOW()`,
+        SELECT id, email, password_hash 
+        FROM pending_registrations 
+        WHERE username = $1 AND verification_code = $2 AND expires_at > NOW()`,
 		req.Username, req.Code).Scan(&pendingID, &encryptedEmail, &passwordHash)
 
 	if err == sql.ErrNoRows {
@@ -200,87 +222,7 @@ func ConfirmRegistration(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(UserResponse{ID: userID, Username: req.Username})
 }
 
-// ====================== ЛОГИН ======================
-func LoginHandler(w http.ResponseWriter, r *http.Request) {
-	var req AuthRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	var user UserResponse
-	var dbPasswordHash string
-
-	err := database.DB.QueryRow(
-		"SELECT id, username, password_hash FROM users WHERE username = $1",
-		req.Username,
-	).Scan(&user.ID, &user.Username, &dbPasswordHash)
-
-	if err == sql.ErrNoRows {
-		http.Error(w, "Пользователь не найден", http.StatusUnauthorized)
-		return
-	}
-	if err != nil {
-		http.Error(w, "Ошибка базы данных", http.StatusInternalServerError)
-		return
-	}
-
-	err = bcrypt.CompareHashAndPassword([]byte(dbPasswordHash), []byte(req.Password))
-	if err != nil {
-		http.Error(w, "Неверный пароль", http.StatusUnauthorized)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(user)
-}
-
-type CreateRoomReq struct {
-	CreatorID   int    `json:"creator_id"`
-	InvitedNick string `json:"invited_nick"`
-	Code        string `json:"code"`
-}
-
-// ====================== GET MESSAGES ======================
-func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
-	roomID := r.URL.Query().Get("room_id")
-
-	rows, err := database.DB.Query(`
-        SELECT u.username, m.content, m.file_path, m.message_type 
-        FROM messages m
-        JOIN users u ON m.sender_id = u.id
-        WHERE m.room_id = $1 
-        ORDER BY m.created_at ASC`, roomID)
-
-	if err != nil {
-		http.Error(w, "Ошибка БД", 500)
-		return
-	}
-	defer rows.Close()
-
-	var msgs []map[string]interface{}
-	for rows.Next() {
-		var nick, text string
-		var filePath, msgType sql.NullString
-		rows.Scan(&nick, &text, &filePath, &msgType)
-
-		msgs = append(msgs, map[string]interface{}{
-			"sender":       nick,
-			"text":         text,
-			"file_path":    filePath.String,
-			"message_type": msgType.String,
-		})
-	}
-
-	if msgs == nil {
-		msgs = []map[string]interface{}{}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(msgs)
-}
-
-// ====================== EMAIL ======================
+// ====================== ПОЧТА ======================
 func sendVerificationEmail(toEmail, username, code string) {
 	from := "gdun_rassilca@internet.ru"
 	pass := "bF2dtLxzfXYW69ec1aJg"
@@ -339,7 +281,7 @@ func sendWelcomeEmail(toEmail, username string) {
 	}
 }
 
-// ====================== СОЗДАНИЕ КОМНАТЫ ======================
+// ====================== СООБЩЕНИЯ И КОМНАТЫ ======================
 func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	var req CreateRoomReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -352,7 +294,6 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Создаём комнату
 	var roomID int
 	err := database.DB.QueryRow(
 		"INSERT INTO rooms (code, creator_id) VALUES ($1, $2) RETURNING id",
@@ -365,17 +306,16 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Добавляем создателя
-	database.DB.Exec("INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-		roomID, req.CreatorID)
+	// Добавляем создателя
+	database.DB.Exec("INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2)", roomID, req.CreatorID)
 
-	// 3. Добавляем приглашённого (если он существует)
-	var invitedID int
-	err = database.DB.QueryRow("SELECT id FROM users WHERE username = $1", req.InvitedNick).Scan(&invitedID)
-	if err == nil {
-		database.DB.Exec("INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-			roomID, invitedID)
-	}
+	// Добавляем приглашённого (если существует)
+	// var invitedID int
+	// err = database.DB.QueryRow("SELECT id FROM users WHERE username = $1", req.InvitedNick).Scan(&invitedID)
+	// if err == nil {
+	// 	database.DB.Exec("INSERT INTO room_participants (room_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+	// 		roomID, invitedID)
+	// }
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -386,7 +326,6 @@ func CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ====================== СПИСОК КОМНАТ ======================
 func GetUserRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	userID := r.URL.Query().Get("user_id")
 	if userID == "" {
@@ -419,7 +358,6 @@ func GetUserRoomsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(rooms)
 }
 
-// Вставь это в handlers/auth.go, если его там нет
 func DeleteRoomHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := r.URL.Query().Get("room_id")
 	userID := r.URL.Query().Get("user_id")
@@ -431,4 +369,42 @@ func DeleteRoomHandler(w http.ResponseWriter, r *http.Request) {
 		database.DB.Exec("DELETE FROM room_participants WHERE room_id = $1 AND user_id = $2", roomID, userID)
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
+	roomID := r.URL.Query().Get("room_id")
+
+	rows, err := database.DB.Query(`
+		SELECT u.username, m.content, m.file_path, m.message_type 
+		FROM messages m
+		JOIN users u ON m.sender_id = u.id
+		WHERE m.room_id = $1 
+		ORDER BY m.created_at ASC`, roomID)
+
+	if err != nil {
+		http.Error(w, "Ошибка БД", 500)
+		return
+	}
+	defer rows.Close()
+
+	var msgs []map[string]interface{}
+	for rows.Next() {
+		var nick, text string
+		var filePath, msgType interface{}
+		rows.Scan(&nick, &text, &filePath, &msgType)
+
+		msgs = append(msgs, map[string]interface{}{
+			"sender":       nick,
+			"text":         text,
+			"file_path":    filePath,
+			"message_type": msgType,
+		})
+	}
+
+	if msgs == nil {
+		msgs = []map[string]interface{}{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(msgs)
 }

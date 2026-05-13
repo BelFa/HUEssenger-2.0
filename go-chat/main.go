@@ -10,7 +10,7 @@ import (
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
@@ -30,20 +30,15 @@ func main() {
 
 	// ====================== КОМНАТЫ ======================
 	http.HandleFunc("/create", corsMiddleware(handlers.CreateRoomHandler))
-
-	// ====================== СООБЩЕНИЯ ======================
+	http.HandleFunc("/my-rooms", corsMiddleware(handlers.GetUserRoomsHandler))
+	http.HandleFunc("/delete-room", corsMiddleware(handlers.DeleteRoomHandler))
 	http.HandleFunc("/messages", corsMiddleware(handlers.GetMessagesHandler))
-
-	// ====================== ЗАГРУЗКА ФАЙЛОВ ======================
-	http.HandleFunc("/upload", corsMiddleware(handlers.UploadFileHandler))
 
 	// ====================== WEBSOCKET ======================
 	http.HandleFunc("/ws", handlers.ServeWS)
 
 	// ====================== СТАТИКА ======================
-	fs := http.FileServer(http.Dir("./static/uploads"))
-	http.Handle("/uploads/", http.StripPrefix("/uploads/", fs))
-
+	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./static/uploads"))))
 	http.Handle("/", http.FileServer(http.Dir("./static")))
 
 	fmt.Println("🚀 Сервер запущен на http://localhost:8080")
