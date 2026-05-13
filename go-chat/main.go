@@ -33,6 +33,8 @@ func main() {
 	http.HandleFunc("/my-rooms", corsMiddleware(handlers.GetUserRoomsHandler))
 	http.HandleFunc("/delete-room", corsMiddleware(handlers.DeleteRoomHandler))
 	http.HandleFunc("/messages", corsMiddleware(handlers.GetMessagesHandler))
+	http.HandleFunc("/rename-room", corsMiddleware(handlers.RenameRoomHandler))
+	http.HandleFunc("/room-participants", corsMiddleware(handlers.GetRoomParticipantsHandler))
 
 	// ====================== WEBSOCKET ======================
 	http.HandleFunc("/ws", handlers.ServeWS)

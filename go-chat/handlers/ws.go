@@ -81,9 +81,7 @@ func ServeWS(w http.ResponseWriter, r *http.Request) {
 			handleDecision(msg.Code, msg.RequesterID, msg.RequesterNick, false)
 		case "invite":
 			handleInvite(msg.TargetNick, msg.Code, userNick)
-		case "new_message":
-			handleNewMessage(userID, userNick, msg)
-		case "message":
+		case "new_message", "message":
 			handleNewMessage(userID, userNick, msg)
 		case "accept_invite":
 			handleAcceptInvite(msg.Code, userNick)
@@ -92,11 +90,10 @@ func ServeWS(w http.ResponseWriter, r *http.Request) {
 		case "delete_message_for_me":
 			handleDeleteMessageForMe(msg.Code, msg.MessageID, msg.Text, msg.Sender)
 		}
-
 	}
 }
 
-// ✅ ИСПРАВЛЕННАЯ handleNewMessage (из первой версии)
+// ЕДИНСТВЕННАЯ ВЕРСИЯ handleNewMessage (с сохранением в БД)
 func handleNewMessage(senderID, senderNick string, msg WSMessage) {
 	var roomID int
 	err := database.DB.QueryRow("SELECT id FROM rooms WHERE code = $1", msg.Code).Scan(&roomID)
@@ -105,26 +102,18 @@ func handleNewMessage(senderID, senderNick string, msg WSMessage) {
 		return
 	}
 
-	// Сохраняем сообщение в БД
-	_, err = database.DB.Exec(`
+	// Сохраняем сообщение и получаем created_at
+	var createdAt time.Time
+	var messageID int64
+	err = database.DB.QueryRow(`
 		INSERT INTO messages (room_id, sender_id, sender_nick, content, message_type, file_path)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		roomID, senderID, senderNick, msg.Text, msg.MessageType, msg.FilePath)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at
+	`, roomID, senderID, senderNick, msg.Text, msg.MessageType, msg.FilePath).Scan(&messageID, &createdAt)
+
 	if err != nil {
 		log.Println("ERROR: failed to save message:", err)
 		return
-	}
-
-	// Получаем created_at сохранённого сообщения
-	var createdAt time.Time
-	err = database.DB.QueryRow(`
-		SELECT created_at FROM messages 
-		WHERE room_id = $1 AND sender_id = $2 AND content = $3 
-		ORDER BY id DESC LIMIT 1
-	`, roomID, senderID, msg.Text).Scan(&createdAt)
-	if err != nil {
-		log.Println("WARNING: failed to get created_at:", err)
-		createdAt = time.Now() // fallback
 	}
 
 	// Получаем всех участников комнаты
@@ -147,6 +136,7 @@ func handleNewMessage(senderID, senderNick string, msg WSMessage) {
 		if conn, ok := clients[nick]; ok {
 			err := conn.WriteJSON(map[string]interface{}{
 				"type":       "message",
+				"id":         messageID,
 				"room_id":    roomID,
 				"sender":     senderNick,
 				"text":       msg.Text,
@@ -158,10 +148,9 @@ func handleNewMessage(senderID, senderNick string, msg WSMessage) {
 			}
 		}
 	}
-	log.Printf("✅ Message from %s sent to room %d", senderNick, roomID)
+	log.Printf("✅ Message from %s saved (id=%d) and sent to room %d", senderNick, messageID, roomID)
 }
 
-// ✅ ИСПРАВЛЕННЫЙ handleJoinRequest (из первой версии)
 func handleJoinRequest(requesterID, requesterNick, code string) {
 	var creatorID string
 	var creatorNick string
@@ -205,7 +194,6 @@ func handleJoinRequest(requesterID, requesterNick, code string) {
 	})
 }
 
-// ✅ ИСПРАВЛЕННАЯ handleDecision
 func handleDecision(code, requesterID, requesterNick string, approved bool) {
 	requestKey := code + "_" + requesterID
 	pendingRequests.Delete(requestKey)
@@ -215,7 +203,6 @@ func handleDecision(code, requesterID, requesterNick string, approved bool) {
 	mu.Unlock()
 
 	if approved {
-		// Добавляем пользователя в комнату
 		_, err := database.DB.Exec(`
 			INSERT INTO room_participants (room_id, user_id)
 			SELECT id, $2 FROM rooms WHERE code = $1
@@ -236,7 +223,6 @@ func handleDecision(code, requesterID, requesterNick string, approved bool) {
 	}
 }
 
-// ✅ ИСПРАВЛЕННЫЙ handleInvite (из первой версии)
 func handleInvite(targetNick string, roomCode string, senderNick string) {
 	mu.Lock()
 	targetConn, isOnline := clients[targetNick]
@@ -267,12 +253,11 @@ func handleAcceptInvite(roomCode, acceptingNick string) {
 		return
 	}
 
-	// Добавляем пользователя в участники
 	res, err := database.DB.Exec(`
-        INSERT INTO room_participants (room_id, user_id)
-        SELECT $1, id FROM users WHERE username = $2
-        ON CONFLICT DO NOTHING
-    `, roomID, acceptingNick)
+		INSERT INTO room_participants (room_id, user_id)
+		SELECT $1, id FROM users WHERE username = $2
+		ON CONFLICT DO NOTHING
+	`, roomID, acceptingNick)
 	if err != nil {
 		log.Printf("❌ Ошибка добавления участника: %v", err)
 		sendToUser(acceptingNick, map[string]string{
@@ -285,22 +270,10 @@ func handleAcceptInvite(roomCode, acceptingNick string) {
 	rowsAffected, _ := res.RowsAffected()
 	log.Printf("✅ Участник %s добавлен в комнату %d (rows: %d)", acceptingNick, roomID, rowsAffected)
 
-	// Отправляем подтверждение
 	sendToUser(acceptingNick, map[string]interface{}{
 		"type": "join_approved",
 		"code": roomCode,
 	})
-}
-
-// ✅ Хелпер для отправки сообщения по нику
-func sendToUser(nick string, data interface{}) {
-	mu.Lock()
-	conn, ok := clients[nick]
-	mu.Unlock()
-
-	if ok {
-		conn.WriteJSON(data)
-	}
 }
 
 func handleDeleteMessageForAll(roomCode string, messageID int, text, sender string) {
@@ -308,14 +281,21 @@ func handleDeleteMessageForAll(roomCode string, messageID int, text, sender stri
 	database.DB.QueryRow("SELECT id FROM rooms WHERE code = $1", roomCode).Scan(&roomID)
 
 	// Удаляем из БД
-	database.DB.Exec("DELETE FROM messages WHERE room_id = $1 AND content = $2 AND sender_nick = $3",
+	_, err := database.DB.Exec("DELETE FROM messages WHERE room_id = $1 AND content = $2 AND sender_nick = $3",
 		roomID, text, sender)
+	if err != nil {
+		log.Printf("ERROR: failed to delete message: %v", err)
+	}
 
 	// Рассылаем всем участникам
-	rows, _ := database.DB.Query(`
-        SELECT u.username FROM room_participants rp 
-        JOIN users u ON rp.user_id = u.id 
-        WHERE rp.room_id = $1`, roomID)
+	rows, err := database.DB.Query(`
+		SELECT u.username FROM room_participants rp 
+		JOIN users u ON rp.user_id = u.id 
+		WHERE rp.room_id = $1`, roomID)
+	if err != nil {
+		log.Println("ERROR: failed to get participants:", err)
+		return
+	}
 	defer rows.Close()
 
 	mu.Lock()
@@ -335,11 +315,20 @@ func handleDeleteMessageForAll(roomCode string, messageID int, text, sender stri
 }
 
 func handleDeleteMessageForMe(roomCode string, messageID int, text, sender string) {
-	// Отправляем только запросившему
 	sendToUser(sender, map[string]interface{}{
 		"type":       "delete_message_for_me",
 		"message_id": messageID,
 		"text":       text,
 		"sender":     sender,
 	})
+}
+
+func sendToUser(nick string, data interface{}) {
+	mu.Lock()
+	conn, ok := clients[nick]
+	mu.Unlock()
+
+	if ok {
+		conn.WriteJSON(data)
+	}
 }

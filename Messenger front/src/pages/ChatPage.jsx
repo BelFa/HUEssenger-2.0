@@ -28,6 +28,9 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const [rooms, setRooms] = useState([]);
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, message: null });
   const [unreadCounts, setUnreadCounts] = useState({});
+  const [showMenu, setShowMenu] = useState(false);
+  const [editingRoom, setEditingRoom] = useState(null);
+  const [newRoomName, setNewRoomName] = useState("");
 
   const wsRef = useRef(null);
   const activeChatRef = useRef(null);
@@ -37,7 +40,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
 
   const myNick = currentUser?.username || "Guest";
 
-  // Автоматическая прокрутка вниз при новых сообщениях
   const scrollToBottom = () => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
@@ -59,7 +61,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     roomsRef.current = rooms;
   }, [rooms]);
 
-  // Закрытие контекстного меню при клике вне его
   useEffect(() => {
     const handleClick = () => {
       setContextMenu({ visible: false, x: 0, y: 0, message: null });
@@ -73,14 +74,67 @@ export default function ChatPage({ onNavigate, currentUser }) {
       const response = await fetch(`http://localhost:8080/my-rooms?user_id=${currentUser.id}`);
       if (response.ok) {
         const data = await response.json();
-        setRooms(data || []);
+        // Загружаем участников для каждой комнаты
+        const roomsWithDetails = await Promise.all(data.map(async (room) => {
+          try {
+            const participantsRes = await fetch(`http://localhost:8080/room-participants?room_id=${room.id}`);
+            if (participantsRes.ok) {
+              const participants = await participantsRes.json();
+              const otherParticipants = participants.filter(p => p !== myNick);
+              let displayName = room.custom_name || "";
+              if (!displayName) {
+                if (otherParticipants.length === 1) {
+                  displayName = otherParticipants[0];
+                } else if (otherParticipants.length > 1) {
+                  displayName = `${myNick}, ${otherParticipants.slice(0, 2).join(", ")}${otherParticipants.length > 2 ? "..." : ""}`;
+                } else {
+                  displayName = room.name || `Комната ${room.code}`;
+                }
+              }
+              return { ...room, displayName, participants: [myNick, ...otherParticipants] };
+            }
+          } catch (err) {
+            console.error("Ошибка загрузки участников:", err);
+          }
+          return { ...room, displayName: room.custom_name || room.name || `Комната ${room.code}`, participants: [myNick] };
+        }));
+        setRooms(roomsWithDetails);
       }
     } catch (err) {
       console.error("Ошибка загрузки списка комнат:", err);
     }
-  }, [currentUser.id]);
+  }, [currentUser.id, myNick]);
 
-  // Загрузка истории сообщений
+  const handleRenameRoom = async () => {
+    if (!editingRoom || !newRoomName.trim()) return;
+    
+    try {
+      const response = await fetch(`http://localhost:8080/rename-room`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          room_id: editingRoom.id,
+          new_name: newRoomName.trim()
+        }),
+      });
+      
+      if (response.ok) {
+        setRooms(prev => prev.map(room => 
+          room.id === editingRoom.id 
+            ? { ...room, displayName: newRoomName.trim(), custom_name: newRoomName.trim() }
+            : room
+        ));
+        setEditingRoom(null);
+        setNewRoomName("");
+      } else {
+        alert("Ошибка переименования");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Ошибка соединения с сервером");
+    }
+  };
+
   useEffect(() => {
     if (activeChat) {
       const loadMessages = async () => {
@@ -106,7 +160,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     }
   }, [activeChat, myNick]);
 
-  // WebSocket с автоматическим переподключением
   useEffect(() => {
     let reconnectAttempts = 0;
     let reconnectTimeout = null;
@@ -115,7 +168,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     const connectWS = () => {
       if (!isMounted) return;
       
-      console.log("🟢 Подключение WebSocket...");
       const ws = new WebSocket(`ws://localhost:8080/ws?user_id=${currentUser.id}&nick=${encodeURIComponent(myNick)}`);
       wsRef.current = ws;
 
@@ -130,10 +182,9 @@ export default function ChatPage({ onNavigate, currentUser }) {
 
         if (data.type === "message") {
           const currentRoomId = activeChatRef.current;
-          const currentRooms = roomsRef.current;
           
           setMessages(prev => {
-            const exists = prev.some(m => m.text === data.text && m.sender === data.sender && m.created_at === data.created_at);
+            const exists = prev.some(m => m.text === data.text && m.sender === data.sender);
             if (exists) return prev;
             return [...prev, {
               id: data.id,
@@ -144,6 +195,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
             }];
           });
 
+          // Увеличиваем счетчик непрочитанных, если сообщение не из активного чата
           if (currentRoomId !== data.room_id) {
             setUnreadCounts(prev => ({
               ...prev,
@@ -152,13 +204,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
           }
         }
 
-        if (data.type === "delete_message_for_all") {
-          setMessages(prev => prev.filter(m => 
-            !(m.text === data.text && m.sender === data.sender)
-          ));
-        }
-
-        if (data.type === "delete_message_for_me") {
+        if (data.type === "delete_message_for_all" || data.type === "delete_message_for_me") {
           setMessages(prev => prev.filter(m => 
             !(m.text === data.text && m.sender === data.sender)
           ));
@@ -223,7 +269,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     };
   }, [currentUser.id, myNick, fetchRooms]);
 
-  // Отдельный эффект для загрузки комнат при старте
   useEffect(() => {
     fetchRooms();
   }, []);
@@ -327,6 +372,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
           }));
         }
         setInviteNick("");
+        setShowMenu(false);
         fetchRooms();
       } else {
         alert("Не удалось создать комнату");
@@ -342,6 +388,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
     if (!code || !wsRef.current) return;
     wsRef.current.send(JSON.stringify({ type: "join_request", code }));
     setWaitingApproval(true);
+    setShowMenu(false);
     setTimeout(() => {
       setWaitingApproval(prev => {
         if (prev) alert("Время ожидания истекло.");
@@ -401,26 +448,69 @@ export default function ChatPage({ onNavigate, currentUser }) {
   }, [incomingRequest]);
 
   const currentRoomCode = rooms.find(c => c.id === activeChat)?.code || "";
+  const currentRoom = rooms.find(c => c.id === activeChat);
 
   return (
     <div className="relative min-h-screen w-full flex overflow-hidden text-white font-sans">
       <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600" />
       <div className="relative flex w-full h-screen">
         
-        {/* Боковая панель с чатами - независимый скролл */}
+        {/* Боковая панель с чатами */}
         <div className="w-72 bg-white/10 backdrop-blur-xl border-r border-white/20 flex flex-col h-full">
           <div className="p-4 font-semibold text-lg border-b border-white/20 flex justify-between items-center flex-shrink-0">
-            Go Messenger
+            <span onClick={() => setShowMenu(!showMenu)} className="cursor-pointer hover:opacity-80 transition">
+              Go Messenger {showMenu ? "←" : "▼"}
+            </span>
             <button onClick={() => onNavigate("login")} className="text-sm opacity-70">Выход</button>
           </div>
+          
+          {/* Меню создания/вступления */}
+          {showMenu && (
+            <div className="p-3 border-b border-white/20 bg-white/5">
+              <div className="space-y-2">
+                <input 
+                  className="w-full p-2 rounded-lg bg-white/10 border border-white/20 outline-none text-sm"
+                  placeholder="Ник пользователя" 
+                  value={inviteNick} 
+                  onChange={(e) => setInviteNick(e.target.value)} 
+                />
+                <button onClick={handleCreateRoom} className="w-full p-2 bg-indigo-500 font-bold rounded-lg hover:bg-indigo-600 transition text-sm">
+                  ➕ Создать комнату
+                </button>
+                <input 
+                  className="w-full p-2 rounded-lg bg-white/10 border border-white/20 outline-none text-sm"
+                  placeholder="Код комнаты" 
+                  value={joinCode} 
+                  onChange={(e) => setJoinCode(e.target.value)} 
+                />
+                <button onClick={handleJoinRoom} className="w-full p-2 bg-pink-500 font-bold rounded-lg hover:bg-pink-600 transition text-sm">
+                  🔑 Вступить по коду
+                </button>
+              </div>
+            </div>
+          )}
+          
+          {/* Список чатов */}
           <div className="flex-1 overflow-y-auto p-2 custom-scroll">
-            {rooms.length === 0 && <div className="p-4 text-center opacity-50">Нет чатов</div>}
+            {rooms.length === 0 && !showMenu && <div className="p-4 text-center opacity-50">Нет чатов</div>}
             {rooms.map((chat) => (
               <div key={chat.id} onClick={() => setActiveChat(chat.id)}
                 className={`p-3 rounded-xl cursor-pointer mb-1 transition relative ${activeChat === chat.id ? "bg-white/20" : "hover:bg-white/10"}`}>
-                <div className="flex justify-between items-center">
-                  <span>{chat.name}</span>
-                  <span className="text-[9px] opacity-30">{chat.code}</span>
+                <div className="flex justify-between items-start">
+                  <div className="flex-1">
+                    <div className="font-medium">{chat.displayName}</div>
+                    <div className="text-[8px] opacity-40 mt-0.5">код: {chat.code}</div>
+                  </div>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingRoom(chat);
+                      setNewRoomName(chat.displayName);
+                    }}
+                    className="opacity-50 hover:opacity-100 transition text-xs ml-2"
+                  >
+                    ⚙️
+                  </button>
                 </div>
                 {unreadCounts[chat.id] > 0 && activeChat !== chat.id && (
                   <div className="absolute top-2 right-2 bg-red-500 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold">
@@ -432,27 +522,43 @@ export default function ChatPage({ onNavigate, currentUser }) {
           </div>
         </div>
 
-        {/* Основная область чата - фиксированная шапка и поле ввода */}
+        {/* Модалка переименования комнаты */}
+        {editingRoom && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
+            <div className="bg-gray-900 border border-indigo-500/50 rounded-2xl p-6 w-96 shadow-2xl">
+              <h3 className="text-xl font-bold mb-4">Переименовать чат</h3>
+              <input 
+                className="w-full mb-4 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
+                value={newRoomName} 
+                onChange={(e) => setNewRoomName(e.target.value)}
+                placeholder="Название чата"
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setEditingRoom(null)}
+                  className="flex-1 p-3 bg-white/10 rounded-xl hover:bg-red-500/50 transition"
+                >
+                  Отмена
+                </button>
+                <button 
+                  onClick={handleRenameRoom}
+                  className="flex-1 p-3 bg-indigo-500 font-bold rounded-xl hover:bg-indigo-600 transition"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Основная область чата */}
         <div className="flex-1 flex flex-col h-full">
           {!activeChat ? (
             <div className="flex-1 flex items-center justify-center bg-black/10">
-              <div className="flex gap-8">
-                <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl p-6 w-80 shadow-2xl">
-                  <h3 className="text-xl font-bold mb-4">Создать комнату</h3>
-                  <input className="w-full mb-4 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
-                    placeholder="Ник пользователя" value={inviteNick} onChange={(e) => setInviteNick(e.target.value)} />
-                  <button onClick={handleCreateRoom} className="w-full p-3 bg-indigo-500 font-bold rounded-xl hover:bg-indigo-600 transition">
-                    Пригласить
-                  </button>
-                </div>
-                <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl p-6 w-80 shadow-2xl">
-                  <h3 className="text-xl font-bold mb-4">Вступить по коду</h3>
-                  <input className="w-full mb-4 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
-                    placeholder="Код комнаты" value={joinCode} onChange={(e) => setJoinCode(e.target.value)} />
-                  <button onClick={handleJoinRoom} className="w-full p-3 bg-pink-500 font-bold rounded-xl hover:bg-pink-600 transition">
-                    Подключиться
-                  </button>
-                </div>
+              <div className="text-center">
+                <p className="text-lg opacity-70">Выберите чат из списка</p>
+                <p className="text-sm opacity-50 mt-2">или нажмите Go Messenger чтобы создать новый</p>
               </div>
             </div>
           ) : (
@@ -460,8 +566,20 @@ export default function ChatPage({ onNavigate, currentUser }) {
               {/* Фиксированная шапка чата */}
               <div className="p-4 border-b border-white/20 backdrop-blur-xl bg-white/5 flex justify-between items-center flex-shrink-0">
                 <div className="flex flex-col">
-                  <b className="text-lg">{rooms.find(c => c.id === activeChat)?.name || "Чат"}</b>
-                  <div className="flex gap-2 mt-1">
+                  <div className="flex items-center gap-2">
+                    <b className="text-lg">{currentRoom?.displayName}</b>
+                    <button 
+                      onClick={() => {
+                        setEditingRoom(currentRoom);
+                        setNewRoomName(currentRoom?.displayName || "");
+                      }}
+                      className="opacity-50 hover:opacity-100 transition text-xs"
+                    >
+                      ✏️
+                    </button>
+                  </div>
+                  <div className="text-[10px] opacity-50 mt-0.5">код: {currentRoomCode}</div>
+                  <div className="flex gap-2 mt-2">
                     <button onClick={() => handleDeleteRoom(activeChat, "me")} className="text-[10px] uppercase bg-white/10 px-2 py-1 rounded hover:bg-orange-500">Покинуть</button>
                     <button onClick={() => handleDeleteRoom(activeChat, "all")} className="text-[10px] uppercase bg-white/10 px-2 py-1 rounded hover:bg-red-500">Удалить чат</button>
                   </div>
@@ -469,7 +587,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 <span className="text-sm opacity-70">🔒 E2EE Активно</span>
               </div>
 
-              {/* Область сообщений с прокруткой */}
+              {/* Область сообщений */}
               <div 
                 ref={messagesContainerRef}
                 className="flex-1 overflow-y-auto p-4 bg-black/10 flex flex-col space-y-3 custom-scroll"
@@ -559,7 +677,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
         </div>
       </div>
 
-      {/* Стили для кастомного скролла */}
       <style jsx>{`
         .custom-scroll::-webkit-scrollbar {
           width: 6px;

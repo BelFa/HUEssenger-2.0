@@ -34,7 +34,8 @@ func InitDB() {
 	CREATE TABLE IF NOT EXISTS rooms (
 		id SERIAL PRIMARY KEY,
 		code VARCHAR(10) UNIQUE NOT NULL,
-		creator_id INTEGER REFERENCES users(id) ON DELETE CASCADE
+		creator_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+		custom_name VARCHAR(100)
 	);
 
 	CREATE TABLE IF NOT EXISTS room_participants (
@@ -44,17 +45,17 @@ func InitDB() {
 		UNIQUE(room_id, user_id)
 	);
 
-	DROP TABLE IF EXISTS messages CASCADE;
-	CREATE TABLE messages (
-    id BIGSERIAL PRIMARY KEY,
-    room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
-    sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    sender_nick VARCHAR(50),
-    content TEXT NOT NULL,
-    file_path TEXT,
-    message_type VARCHAR(20) DEFAULT 'text',
-    created_at TIMESTAMP DEFAULT NOW()
-);
+	CREATE TABLE IF NOT EXISTS messages (
+		id BIGSERIAL PRIMARY KEY,
+		room_id INTEGER REFERENCES rooms(id) ON DELETE CASCADE,
+		sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+		sender_nick VARCHAR(50),
+		content TEXT NOT NULL,
+		file_path TEXT,
+		message_type VARCHAR(20) DEFAULT 'text',
+		created_at TIMESTAMP DEFAULT NOW()
+	);
+
 	CREATE TABLE IF NOT EXISTS pending_registrations (
 		id SERIAL PRIMARY KEY,
 		username VARCHAR(50) UNIQUE NOT NULL,

@@ -410,3 +410,53 @@ func GetMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(msgs)
 }
+
+type RenameRoomReq struct {
+	RoomID  int    `json:"room_id"`
+	NewName string `json:"new_name"`
+}
+
+func RenameRoomHandler(w http.ResponseWriter, r *http.Request) {
+	var req RenameRoomReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Ошибка данных", http.StatusBadRequest)
+		return
+	}
+
+	// Сохраняем кастомное имя в отдельную колонку (нужно добавить в БД)
+	_, err := database.DB.Exec(`
+        UPDATE rooms SET custom_name = $1 WHERE id = $2
+    `, req.NewName, req.RoomID)
+
+	if err != nil {
+		http.Error(w, "Ошибка обновления", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+func GetRoomParticipantsHandler(w http.ResponseWriter, r *http.Request) {
+	roomID := r.URL.Query().Get("room_id")
+
+	rows, err := database.DB.Query(`
+        SELECT u.username FROM room_participants rp
+        JOIN users u ON rp.user_id = u.id
+        WHERE rp.room_id = $1
+    `, roomID)
+	if err != nil {
+		http.Error(w, "Ошибка БД", 500)
+		return
+	}
+	defer rows.Close()
+
+	var participants []string
+	for rows.Next() {
+		var username string
+		rows.Scan(&username)
+		participants = append(participants, username)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(participants)
+}
