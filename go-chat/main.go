@@ -39,6 +39,9 @@ func main() {
 	// ====================== WEBSOCKET ======================
 	http.HandleFunc("/ws", handlers.ServeWS)
 
+	// ====================== ЗАГРУЗКА ФАЙЛОВ ======================
+	http.HandleFunc("/upload", corsMiddleware(handlers.UploadFileHandler))
+
 	// ====================== СТАТИКА ======================
 	http.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("./static/uploads"))))
 	http.Handle("/", http.FileServer(http.Dir("./static")))

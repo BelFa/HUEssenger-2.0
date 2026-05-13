@@ -17,6 +17,19 @@ const decryptMessage = (cipherText, secretKey) => {
   }
 };
 
+const isImage = (file) => {
+  return file.type.startsWith('image/');
+};
+
+const isPDF = (file) => {
+  return file.type === 'application/pdf';
+};
+
+const isValidFile = (file) => {
+  const maxSize = 5 * 1024 * 1024;
+  return (isImage(file) || isPDF(file)) && file.size <= maxSize;
+};
+
 export default function ChatPage({ onNavigate, currentUser }) {
   const [activeChat, setActiveChat] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -31,12 +44,14 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const [showMenu, setShowMenu] = useState(false);
   const [editingRoom, setEditingRoom] = useState(null);
   const [newRoomName, setNewRoomName] = useState("");
+  const [uploading, setUploading] = useState(false);
 
   const wsRef = useRef(null);
   const activeChatRef = useRef(null);
   const roomsRef = useRef(rooms);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const myNick = currentUser?.username || "Guest";
 
@@ -69,12 +84,33 @@ export default function ChatPage({ onNavigate, currentUser }) {
     return () => window.removeEventListener("click", handleClick);
   }, []);
 
+  useEffect(() => {
+    const handlePaste = async (e) => {
+      if (!activeChat) return;
+      
+      const items = e.clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          const file = items[i].getAsFile();
+          if (file && isValidFile(file)) {
+            await uploadAndSendFile(file);
+          } else {
+            alert("Файл должен быть изображением или PDF до 5MB");
+          }
+          break;
+        }
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [activeChat]);
+
   const fetchRooms = useCallback(async () => {
     try {
       const response = await fetch(`http://localhost:8080/my-rooms?user_id=${currentUser.id}`);
       if (response.ok) {
         const data = await response.json();
-        // Загружаем участников для каждой комнаты
         const roomsWithDetails = await Promise.all(data.map(async (room) => {
           try {
             const participantsRes = await fetch(`http://localhost:8080/room-participants?room_id=${room.id}`);
@@ -88,7 +124,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 } else if (otherParticipants.length > 1) {
                   displayName = `${myNick}, ${otherParticipants.slice(0, 2).join(", ")}${otherParticipants.length > 2 ? "..." : ""}`;
                 } else {
-                  displayName = room.name || `Комната ${room.code}`;
+                  displayName = myNick;
                 }
               }
               return { ...room, displayName, participants: [myNick, ...otherParticipants] };
@@ -96,7 +132,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
           } catch (err) {
             console.error("Ошибка загрузки участников:", err);
           }
-          return { ...room, displayName: room.custom_name || room.name || `Комната ${room.code}`, participants: [myNick] };
+          return { ...room, displayName: room.custom_name || myNick, participants: [myNick] };
         }));
         setRooms(roomsWithDetails);
       }
@@ -126,6 +162,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         ));
         setEditingRoom(null);
         setNewRoomName("");
+        alert("✅ Название чата изменено!");
       } else {
         alert("Ошибка переименования");
       }
@@ -133,6 +170,72 @@ export default function ChatPage({ onNavigate, currentUser }) {
       console.error(err);
       alert("Ошибка соединения с сервером");
     }
+  };
+
+  const uploadAndSendFile = async (file) => {
+    if (!activeChat) return;
+    
+    const activeRoom = rooms.find(c => c.id === activeChat);
+    if (!activeRoom) {
+      alert("Комната не найдена");
+      return;
+    }
+
+    setUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const uploadRes = await fetch("http://localhost:8080/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (uploadRes.ok) {
+        const filePath = await uploadRes.text();
+        const fileType = isImage(file) ? "image" : "pdf";
+        const encryptedPath = encryptMessage(filePath, activeRoom.code);
+        
+        wsRef.current.send(JSON.stringify({
+          type: "message",
+          code: activeRoom.code,
+          text: encryptedPath,
+          sender: myNick,
+          message_type: fileType,
+          file_path: filePath
+        }));
+
+        const now = new Date();
+        const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+
+        setMessages(prev => [...prev, {
+          id: Date.now(),
+          sender: myNick,
+          text: encryptedPath,
+          isMe: true,
+          created_at: timeStr,
+          message_type: fileType,
+          file_path: filePath
+        }]);
+      } else {
+        alert("Ошибка загрузки файла");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Ошибка при отправке файла");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (file && isValidFile(file)) {
+      uploadAndSendFile(file);
+    } else {
+      alert("Файл должен быть изображением или PDF до 5MB");
+    }
+    fileInputRef.current.value = "";
   };
 
   useEffect(() => {
@@ -147,7 +250,9 @@ export default function ChatPage({ onNavigate, currentUser }) {
               sender: m.sender,
               text: m.text,
               isMe: m.sender === myNick,
-              created_at: m.created_at
+              created_at: m.created_at,
+              message_type: m.message_type,
+              file_path: m.file_path
             })));
           }
         } catch (err) {
@@ -191,11 +296,12 @@ export default function ChatPage({ onNavigate, currentUser }) {
               sender: data.sender,
               text: data.text,
               isMe: data.sender === myNick,
-              created_at: data.created_at
+              created_at: data.created_at,
+              message_type: data.message_type,
+              file_path: data.file_path
             }];
           });
 
-          // Увеличиваем счетчик непрочитанных, если сообщение не из активного чата
           if (currentRoomId !== data.room_id) {
             setUnreadCounts(prev => ({
               ...prev,
@@ -291,7 +397,8 @@ export default function ChatPage({ onNavigate, currentUser }) {
       sender: myNick,
       text: encryptedText,
       isMe: true,
-      created_at: timeStr
+      created_at: timeStr,
+      message_type: "text"
     }]);
 
     wsRef.current.send(JSON.stringify({
@@ -450,6 +557,34 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const currentRoomCode = rooms.find(c => c.id === activeChat)?.code || "";
   const currentRoom = rooms.find(c => c.id === activeChat);
 
+  const renderMessageContent = (msg) => {
+    const decryptedText = decryptMessage(msg.text, currentRoomCode);
+    
+    if (msg.message_type === "image" && msg.file_path) {
+      return (
+        <img 
+          src={`http://localhost:8080${msg.file_path}`} 
+          alt="image" 
+          className="max-w-[200px] max-h-[200px] rounded-lg cursor-pointer"
+          onClick={() => window.open(`http://localhost:8080${msg.file_path}`, '_blank')}
+        />
+      );
+    } else if (msg.message_type === "pdf" && msg.file_path) {
+      return (
+        <a 
+          href={`http://localhost:8080${msg.file_path}`} 
+          target="_blank" 
+          rel="noopener noreferrer"
+          className="text-blue-300 hover:text-blue-100 underline flex items-center gap-2"
+        >
+          📄 PDF файл
+        </a>
+      );
+    } else {
+      return <div className="break-words whitespace-pre-wrap">{decryptedText}</div>;
+    }
+  };
+
   return (
     <div className="relative min-h-screen w-full flex overflow-hidden text-white font-sans">
       <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600" />
@@ -464,7 +599,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
             <button onClick={() => onNavigate("login")} className="text-sm opacity-70">Выход</button>
           </div>
           
-          {/* Меню создания/вступления */}
           {showMenu && (
             <div className="p-3 border-b border-white/20 bg-white/5">
               <div className="space-y-2">
@@ -490,7 +624,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
             </div>
           )}
           
-          {/* Список чатов */}
           <div className="flex-1 overflow-y-auto p-2 custom-scroll">
             {rooms.length === 0 && !showMenu && <div className="p-4 text-center opacity-50">Нет чатов</div>}
             {rooms.map((chat) => (
@@ -522,7 +655,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
           </div>
         </div>
 
-        {/* Модалка переименования комнаты */}
         {editingRoom && (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
             <div className="bg-gray-900 border border-indigo-500/50 rounded-2xl p-6 w-96 shadow-2xl">
@@ -563,7 +695,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
             </div>
           ) : (
             <>
-              {/* Фиксированная шапка чата */}
               <div className="p-4 border-b border-white/20 backdrop-blur-xl bg-white/5 flex justify-between items-center flex-shrink-0">
                 <div className="flex flex-col">
                   <div className="flex items-center gap-2">
@@ -587,11 +718,17 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 <span className="text-sm opacity-70">🔒 E2EE Активно</span>
               </div>
 
-              {/* Область сообщений */}
               <div 
                 ref={messagesContainerRef}
                 className="flex-1 overflow-y-auto p-4 bg-black/10 flex flex-col space-y-3 custom-scroll"
               >
+                {uploading && (
+                  <div className="flex justify-center">
+                    <div className="bg-white/20 px-4 py-2 rounded-full text-sm">
+                      📤 Загрузка файла...
+                    </div>
+                  </div>
+                )}
                 {messages.map((m, i) => (
                   <div 
                     key={i} 
@@ -600,9 +737,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
                   >
                     <span className="text-sm font-semibold opacity-80 mb-1 px-2">{m.sender}</span>
                     <div className={`max-w-[70%] px-4 py-2 rounded-2xl ${m.isMe ? "bg-indigo-500" : "bg-white/20"} cursor-context-menu`}>
-                      <div className="break-words whitespace-pre-wrap">
-                        {decryptMessage(m.text, currentRoomCode)}
-                      </div>
+                      {renderMessageContent(m)}
                       <div className="text-[9px] opacity-50 text-right mt-1">
                         {m.created_at || "—"}
                       </div>
@@ -612,12 +747,34 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* Фиксированное поле ввода */}
-              <div className="p-4 bg-white/5 backdrop-blur-xl border-t border-white/20 flex gap-3 flex-shrink-0">
-                <input className="flex-1 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
-                  value={input} onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Ваше сообщение..." />
-                <button onClick={send} className="px-6 py-3 bg-white text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition">
+              {/* Поле ввода со скрепкой */}
+              <div className="p-4 bg-white/5 backdrop-blur-xl border-t border-white/20 flex gap-3 flex-shrink-0 items-center">
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  className="opacity-70 hover:opacity-100 transition text-2xl bg-white/10 p-2 rounded-full w-10 h-10 flex items-center justify-center flex-shrink-0"
+                  disabled={uploading}
+                  title="Прикрепить файл (изображение или PDF до 5МБ)"
+                >
+                  📎
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*,application/pdf"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                />
+                <input 
+                  className="flex-1 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
+                  value={input} 
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && send()} 
+                  placeholder="Ваше сообщение..." 
+                />
+                <button 
+                  onClick={send} 
+                  className="px-6 py-3 bg-white text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition"
+                >
                   Отправить
                 </button>
               </div>
