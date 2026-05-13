@@ -27,17 +27,29 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const [incomingRequest, setIncomingRequest] = useState(null);
   const [rooms, setRooms] = useState([]);
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, message: null });
-  const [unreadCounts, setUnreadCounts] = useState({}); // { roomId: count }
+  const [unreadCounts, setUnreadCounts] = useState({});
 
   const wsRef = useRef(null);
   const activeChatRef = useRef(null);
   const roomsRef = useRef(rooms);
+  const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
 
   const myNick = currentUser?.username || "Guest";
 
+  // Автоматическая прокрутка вниз при новых сообщениях
+  const scrollToBottom = () => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
   useEffect(() => {
     activeChatRef.current = activeChat;
-    // Когда открываем чат, сбрасываем счетчик непрочитанных для этой комнаты
     if (activeChat) {
       setUnreadCounts(prev => ({ ...prev, [activeChat]: 0 }));
     }
@@ -119,9 +131,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         if (data.type === "message") {
           const currentRoomId = activeChatRef.current;
           const currentRooms = roomsRef.current;
-          const currentRoom = currentRooms.find(r => r.id === data.room_id);
           
-          // Добавляем сообщение в список
           setMessages(prev => {
             const exists = prev.some(m => m.text === data.text && m.sender === data.sender && m.created_at === data.created_at);
             if (exists) return prev;
@@ -134,7 +144,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
             }];
           });
 
-          // Если активный чат НЕ этот, увеличиваем счетчик непрочитанных
           if (currentRoomId !== data.room_id) {
             setUnreadCounts(prev => ({
               ...prev,
@@ -232,7 +241,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     const now = new Date();
     const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
-    // Добавляем локально, чтобы отправитель видел сообщение сразу
     setMessages(prev => [...prev, {
       id: Date.now(),
       sender: myNick,
@@ -268,7 +276,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
     const activeRoom = rooms.find(c => c.id === activeChat);
     
     if (deleteForAll) {
-      // Удаляем для всех (если своё сообщение ИЛИ если есть права)
       if (window.confirm("Удалить это сообщение для ВСЕХ участников?")) {
         wsRef.current.send(JSON.stringify({
           type: "delete_message_for_all",
@@ -280,7 +287,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
         setMessages(prev => prev.filter(m => m !== message));
       }
     } else {
-      // Удаляем только у себя
       wsRef.current.send(JSON.stringify({
         type: "delete_message_for_me",
         code: activeRoom?.code,
@@ -399,15 +405,15 @@ export default function ChatPage({ onNavigate, currentUser }) {
   return (
     <div className="relative min-h-screen w-full flex overflow-hidden text-white font-sans">
       <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600" />
-      <div className="relative flex w-full">
-        {/* Боковая панель */}
-        <div className="w-72 bg-white/10 backdrop-blur-xl border-r border-white/20 flex flex-col">
-          <div className="p-4 font-semibold text-lg border-b border-white/20 flex justify-between items-center cursor-pointer"
-               onClick={() => setActiveChat(null)}>
+      <div className="relative flex w-full h-screen">
+        
+        {/* Боковая панель с чатами - независимый скролл */}
+        <div className="w-72 bg-white/10 backdrop-blur-xl border-r border-white/20 flex flex-col h-full">
+          <div className="p-4 font-semibold text-lg border-b border-white/20 flex justify-between items-center flex-shrink-0">
             Go Messenger
             <button onClick={() => onNavigate("login")} className="text-sm opacity-70">Выход</button>
           </div>
-          <div className="flex-1 overflow-y-auto p-2">
+          <div className="flex-1 overflow-y-auto p-2 custom-scroll">
             {rooms.length === 0 && <div className="p-4 text-center opacity-50">Нет чатов</div>}
             {rooms.map((chat) => (
               <div key={chat.id} onClick={() => setActiveChat(chat.id)}
@@ -416,7 +422,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
                   <span>{chat.name}</span>
                   <span className="text-[9px] opacity-30">{chat.code}</span>
                 </div>
-                {/* Счетчик непрочитанных сообщений */}
                 {unreadCounts[chat.id] > 0 && activeChat !== chat.id && (
                   <div className="absolute top-2 right-2 bg-red-500 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold">
                     {unreadCounts[chat.id] > 9 ? "9+" : unreadCounts[chat.id]}
@@ -427,8 +432,8 @@ export default function ChatPage({ onNavigate, currentUser }) {
           </div>
         </div>
 
-        {/* Основная область чата */}
-        <div className="flex-1 flex flex-col relative">
+        {/* Основная область чата - фиксированная шапка и поле ввода */}
+        <div className="flex-1 flex flex-col h-full">
           {!activeChat ? (
             <div className="flex-1 flex items-center justify-center bg-black/10">
               <div className="flex gap-8">
@@ -452,7 +457,8 @@ export default function ChatPage({ onNavigate, currentUser }) {
             </div>
           ) : (
             <>
-              <div className="p-4 border-b border-white/20 backdrop-blur-xl bg-white/5 flex justify-between items-center">
+              {/* Фиксированная шапка чата */}
+              <div className="p-4 border-b border-white/20 backdrop-blur-xl bg-white/5 flex justify-between items-center flex-shrink-0">
                 <div className="flex flex-col">
                   <b className="text-lg">{rooms.find(c => c.id === activeChat)?.name || "Чат"}</b>
                   <div className="flex gap-2 mt-1">
@@ -463,8 +469,11 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 <span className="text-sm opacity-70">🔒 E2EE Активно</span>
               </div>
 
-              {/* Список сообщений */}
-              <div className="flex-1 p-4 overflow-y-auto bg-black/10 flex flex-col space-y-3">
+              {/* Область сообщений с прокруткой */}
+              <div 
+                ref={messagesContainerRef}
+                className="flex-1 overflow-y-auto p-4 bg-black/10 flex flex-col space-y-3 custom-scroll"
+              >
                 {messages.map((m, i) => (
                   <div 
                     key={i} 
@@ -482,10 +491,11 @@ export default function ChatPage({ onNavigate, currentUser }) {
                     </div>
                   </div>
                 ))}
+                <div ref={messagesEndRef} />
               </div>
 
-              {/* Поле ввода */}
-              <div className="p-4 bg-white/5 backdrop-blur-xl border-t border-white/20 flex gap-3">
+              {/* Фиксированное поле ввода */}
+              <div className="p-4 bg-white/5 backdrop-blur-xl border-t border-white/20 flex gap-3 flex-shrink-0">
                 <input className="flex-1 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
                   value={input} onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Ваше сообщение..." />
@@ -548,6 +558,24 @@ export default function ChatPage({ onNavigate, currentUser }) {
           )}
         </div>
       </div>
+
+      {/* Стили для кастомного скролла */}
+      <style jsx>{`
+        .custom-scroll::-webkit-scrollbar {
+          width: 6px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+          background: rgba(255, 255, 255, 0.1);
+          border-radius: 10px;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+          background: rgba(255, 255, 255, 0.3);
+          border-radius: 10px;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb:hover {
+          background: rgba(255, 255, 255, 0.5);
+        }
+      `}</style>
     </div>
   );
 }
