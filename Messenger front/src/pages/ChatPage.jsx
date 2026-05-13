@@ -27,6 +27,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const [incomingRequest, setIncomingRequest] = useState(null);
   const [rooms, setRooms] = useState([]);
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, message: null });
+  const [unreadCounts, setUnreadCounts] = useState({}); // { roomId: count }
 
   const wsRef = useRef(null);
   const activeChatRef = useRef(null);
@@ -36,6 +37,10 @@ export default function ChatPage({ onNavigate, currentUser }) {
 
   useEffect(() => {
     activeChatRef.current = activeChat;
+    // Когда открываем чат, сбрасываем счетчик непрочитанных для этой комнаты
+    if (activeChat) {
+      setUnreadCounts(prev => ({ ...prev, [activeChat]: 0 }));
+    }
   }, [activeChat]);
 
   useEffect(() => {
@@ -114,30 +119,40 @@ export default function ChatPage({ onNavigate, currentUser }) {
         if (data.type === "message") {
           const currentRoomId = activeChatRef.current;
           const currentRooms = roomsRef.current;
-          const currentRoom = currentRooms.find(r => r.id === currentRoomId);
-          if (currentRoom && (data.code === currentRoom.code || data.room_id === currentRoomId)) {
-            setMessages(prev => {
-              const exists = prev.some(m => m.text === data.text && m.sender === data.sender && m.created_at === data.created_at);
-              if (exists) return prev;
-              return [...prev, {
-                id: data.id,
-                sender: data.sender,
-                text: data.text,
-                isMe: data.sender === myNick,
-                created_at: data.created_at
-              }];
-            });
+          const currentRoom = currentRooms.find(r => r.id === data.room_id);
+          
+          // Добавляем сообщение в список
+          setMessages(prev => {
+            const exists = prev.some(m => m.text === data.text && m.sender === data.sender && m.created_at === data.created_at);
+            if (exists) return prev;
+            return [...prev, {
+              id: data.id,
+              sender: data.sender,
+              text: data.text,
+              isMe: data.sender === myNick,
+              created_at: data.created_at
+            }];
+          });
+
+          // Если активный чат НЕ этот, увеличиваем счетчик непрочитанных
+          if (currentRoomId !== data.room_id) {
+            setUnreadCounts(prev => ({
+              ...prev,
+              [data.room_id]: (prev[data.room_id] || 0) + 1
+            }));
           }
         }
 
         if (data.type === "delete_message_for_all") {
-          // Удаляем сообщение у всех
-          setMessages(prev => prev.filter(m => !(m.id === data.message_id || (m.text === data.text && m.sender === data.sender))));
+          setMessages(prev => prev.filter(m => 
+            !(m.text === data.text && m.sender === data.sender)
+          ));
         }
 
         if (data.type === "delete_message_for_me") {
-          // Удаляем сообщение только у себя
-          setMessages(prev => prev.filter(m => !(m.id === data.message_id || (m.text === data.text && m.sender === data.sender))));
+          setMessages(prev => prev.filter(m => 
+            !(m.text === data.text && m.sender === data.sender)
+          ));
         }
 
         if (data.type === "incoming_request") {
@@ -252,17 +267,18 @@ export default function ChatPage({ onNavigate, currentUser }) {
 
     const activeRoom = rooms.find(c => c.id === activeChat);
     
-    if (deleteForAll && message.isMe) {
-      // Удаляем для всех (только если своё сообщение)
-      wsRef.current.send(JSON.stringify({
-        type: "delete_message_for_all",
-        code: activeRoom?.code,
-        message_id: message.id,
-        text: message.text,
-        sender: message.sender
-      }));
-      // Локально удаляем сразу
-      setMessages(prev => prev.filter(m => m !== message));
+    if (deleteForAll) {
+      // Удаляем для всех (если своё сообщение ИЛИ если есть права)
+      if (window.confirm("Удалить это сообщение для ВСЕХ участников?")) {
+        wsRef.current.send(JSON.stringify({
+          type: "delete_message_for_all",
+          code: activeRoom?.code,
+          message_id: message.id,
+          text: message.text,
+          sender: message.sender
+        }));
+        setMessages(prev => prev.filter(m => m !== message));
+      }
     } else {
       // Удаляем только у себя
       wsRef.current.send(JSON.stringify({
@@ -272,7 +288,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
         text: message.text,
         sender: message.sender
       }));
-      // Локально удаляем сразу
       setMessages(prev => prev.filter(m => m !== message));
     }
 
@@ -396,11 +411,17 @@ export default function ChatPage({ onNavigate, currentUser }) {
             {rooms.length === 0 && <div className="p-4 text-center opacity-50">Нет чатов</div>}
             {rooms.map((chat) => (
               <div key={chat.id} onClick={() => setActiveChat(chat.id)}
-                className={`p-3 rounded-xl cursor-pointer mb-1 transition ${activeChat === chat.id ? "bg-white/20" : "hover:bg-white/10"}`}>
+                className={`p-3 rounded-xl cursor-pointer mb-1 transition relative ${activeChat === chat.id ? "bg-white/20" : "hover:bg-white/10"}`}>
                 <div className="flex justify-between items-center">
                   <span>{chat.name}</span>
                   <span className="text-[9px] opacity-30">{chat.code}</span>
                 </div>
+                {/* Счетчик непрочитанных сообщений */}
+                {unreadCounts[chat.id] > 0 && activeChat !== chat.id && (
+                  <div className="absolute top-2 right-2 bg-red-500 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold">
+                    {unreadCounts[chat.id] > 9 ? "9+" : unreadCounts[chat.id]}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -481,29 +502,18 @@ export default function ChatPage({ onNavigate, currentUser }) {
               className="fixed bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 overflow-hidden"
               style={{ top: contextMenu.y, left: contextMenu.x }}
             >
-              {contextMenu.message?.isMe ? (
-                <>
-                  <button 
-                    onClick={() => handleDeleteMessage(contextMenu.message, true)}
-                    className="block w-full px-4 py-2 text-left text-red-400 hover:bg-red-500/20 transition text-sm"
-                  >
-                    🗑 Удалить для всех
-                  </button>
-                  <button 
-                    onClick={() => handleDeleteMessage(contextMenu.message, false)}
-                    className="block w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 transition text-sm"
-                  >
-                    ❌ Удалить только у себя
-                  </button>
-                </>
-              ) : (
-                <button 
-                  onClick={() => handleDeleteMessage(contextMenu.message, false)}
-                  className="block w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 transition text-sm"
-                >
-                  ❌ Скрыть сообщение
-                </button>
-              )}
+              <button 
+                onClick={() => handleDeleteMessage(contextMenu.message, false)}
+                className="block w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 transition text-sm"
+              >
+                ❌ Удалить только у себя
+              </button>
+              <button 
+                onClick={() => handleDeleteMessage(contextMenu.message, true)}
+                className="block w-full px-4 py-2 text-left text-red-400 hover:bg-red-500/20 transition text-sm"
+              >
+                🗑 Удалить для всех
+              </button>
             </div>
           )}
 
