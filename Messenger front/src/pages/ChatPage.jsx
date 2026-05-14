@@ -753,7 +753,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         <div style={styles.titleBar}>
           <div style={styles.titleBarText}>
             <span style={styles.titleIcon}>💬</span>
-            Ждун - Защищённый мессенджер
+            Ждун
           </div>
           <div style={styles.titleBarButtons}>
             <button style={styles.titleButton}>?</button>
