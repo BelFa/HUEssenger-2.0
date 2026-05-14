@@ -460,15 +460,35 @@ func RenameRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Обновляем название
+	// Обновляем название для ВСЕХ участников (меняем в таблице rooms)
 	_, err = database.DB.Exec(`
-		UPDATE rooms SET custom_name = $1 WHERE id = $2
-	`, req.NewName, req.RoomID)
+        UPDATE rooms SET custom_name = $1 WHERE id = $2
+    `, req.NewName, req.RoomID)
 
 	if err != nil {
 		log.Printf("Ошибка переименования: %v", err)
 		http.Error(w, "Ошибка обновления", http.StatusInternalServerError)
 		return
+	}
+
+	// Отправляем уведомление всем участникам чата о смене названия
+	rows, err := database.DB.Query(`
+        SELECT u.username FROM room_participants rp
+        JOIN users u ON rp.user_id = u.id
+        WHERE rp.room_id = $1
+    `, req.RoomID)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var username string
+			rows.Scan(&username)
+			// Отправляем всем участникам через WebSocket
+			sendToUser(username, map[string]interface{}{
+				"type":     "room_renamed",
+				"room_id":  req.RoomID,
+				"new_name": req.NewName,
+			})
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

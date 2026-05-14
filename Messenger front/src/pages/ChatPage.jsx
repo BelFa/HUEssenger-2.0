@@ -42,10 +42,22 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, message: null });
   const [unreadCounts, setUnreadCounts] = useState({});
   const [showMenu, setShowMenu] = useState(false);
-  const [editingRoom, setEditingRoom] = useState(null);
-  const [newRoomName, setNewRoomName] = useState("");
   const [uploading, setUploading] = useState(false);
   const [currentTime, setCurrentTime] = useState("");
+  
+  // Защита от спама для текстовых сообщений
+  const [spamBlocked, setSpamBlocked] = useState(false);
+  const [spamTimer, setSpamTimer] = useState(0);
+  const spamTimeoutRef = useRef(null);
+  const spamCountRef = useRef(0);
+  const spamCountTimeoutRef = useRef(null);
+  
+  // Защита от спама для файлов
+  const [fileSpamBlocked, setFileSpamBlocked] = useState(false);
+  const [fileSpamTimer, setFileSpamTimer] = useState(0);
+  const fileSpamTimeoutRef = useRef(null);
+  const fileSpamCountRef = useRef(0);
+  const fileSpamCountTimeoutRef = useRef(null);
 
   const wsRef = useRef(null);
   const activeChatRef = useRef(null);
@@ -55,6 +67,46 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const fileInputRef = useRef(null);
 
   const myNick = currentUser?.username || "Guest";
+
+  // Звук запуска Windows 95
+  useEffect(() => {
+    const playStartupSound = () => {
+      try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const now = audioContext.currentTime;
+        
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        
+        oscillator.frequency.setValueAtTime(440, now);
+        oscillator.frequency.exponentialRampToValueAtTime(880, now + 0.3);
+        
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 1);
+        
+        oscillator.start();
+        oscillator.stop(now + 1);
+        
+        audioContext.resume();
+      } catch (e) {
+        console.log("Звук не воспроизведён:", e);
+      }
+    };
+    
+    const handleFirstClick = () => {
+      playStartupSound();
+      document.removeEventListener('click', handleFirstClick);
+    };
+    
+    document.addEventListener('click', handleFirstClick);
+    
+    return () => {
+      document.removeEventListener('click', handleFirstClick);
+    };
+  }, []);
 
   // Реальное время для статус-бара
   useEffect(() => {
@@ -101,6 +153,9 @@ export default function ChatPage({ onNavigate, currentUser }) {
     const handlePaste = async (e) => {
       if (!activeChat) return;
       
+      // Предотвращаем вставку, чтобы проверить файл
+      e.preventDefault();
+      
       const items = e.clipboardData.items;
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.indexOf('image') !== -1) {
@@ -130,67 +185,133 @@ export default function ChatPage({ onNavigate, currentUser }) {
             if (participantsRes.ok) {
               const participants = await participantsRes.json();
               const otherParticipants = participants.filter(p => p !== myNick);
-              let displayName = room.custom_name || "";
-              if (!displayName) {
-                if (otherParticipants.length === 1) {
-                  displayName = otherParticipants[0];
-                } else if (otherParticipants.length > 1) {
-                  displayName = `${myNick}, ${otherParticipants.slice(0, 2).join(", ")}${otherParticipants.length > 2 ? "..." : ""}`;
-                } else {
-                  displayName = myNick;
-                }
+              let displayName = "";
+              if (otherParticipants.length === 1) {
+                displayName = otherParticipants[0];
+              } else if (otherParticipants.length > 1) {
+                displayName = `${myNick}, ${otherParticipants.slice(0, 2).join(", ")}${otherParticipants.length > 2 ? "..." : ""}`;
+              } else {
+                displayName = myNick;
               }
               return { ...room, displayName, participants: [myNick, ...otherParticipants] };
             }
           } catch (err) {
             console.error("Ошибка загрузки участников:", err);
           }
-          return { ...room, displayName: room.custom_name || myNick, participants: [myNick] };
+          return { ...room, displayName: myNick, participants: [myNick] };
         }));
-        setRooms(roomsWithDetails);
+        
+        const sortedRooms = roomsWithDetails.sort((a, b) => b.id - a.id);
+        setRooms(sortedRooms);
       }
     } catch (err) {
       console.error("Ошибка загрузки списка комнат:", err);
     }
   }, [currentUser.id, myNick]);
 
-  const handleRenameRoom = async () => {
-    if (!editingRoom || !newRoomName.trim()) return;
+  // Проверка на спам для текстовых сообщений
+  const checkTextSpam = () => {
+    const now = Date.now();
+    const lastTime = spamTimeoutRef.current;
     
-    try {
-      const response = await fetch(`http://localhost:8080/rename-room`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          room_id: editingRoom.id,
-          new_name: newRoomName.trim()
-        }),
-      });
-      
-      if (response.ok) {
-        setRooms(prev => prev.map(room => 
-          room.id === editingRoom.id 
-            ? { ...room, displayName: newRoomName.trim(), custom_name: newRoomName.trim() }
-            : room
-        ));
-        setEditingRoom(null);
-        setNewRoomName("");
-        alert("✅ Название чата изменено!");
-      } else {
-        alert("Ошибка переименования");
+    if (lastTime && (now - lastTime) < 1000) {
+      spamCountRef.current += 1;
+      if (spamCountRef.current >= 4 && !spamBlocked) {
+        setSpamBlocked(true);
+        setSpamTimer(30);
+        
+        const timerInterval = setInterval(() => {
+          setSpamTimer(prev => {
+            if (prev <= 1) {
+              clearInterval(timerInterval);
+              setSpamBlocked(false);
+              spamCountRef.current = 0;
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+        spamCountTimeoutRef.current = timerInterval;
+        return false;
       }
-    } catch (err) {
-      console.error(err);
-      alert("Ошибка соединения с сервером");
+    } else {
+      spamCountRef.current = 1;
     }
+    
+    if (spamCountTimeoutRef.current && typeof spamCountTimeoutRef.current !== 'number') {
+      clearTimeout(spamCountTimeoutRef.current);
+    }
+    const timeout = setTimeout(() => {
+      spamCountRef.current = 0;
+    }, 1000);
+    spamCountTimeoutRef.current = timeout;
+    
+    spamTimeoutRef.current = now;
+    return true;
+  };
+
+  // Проверка на спам для файлов
+  const checkFileSpam = () => {
+    const now = Date.now();
+    const lastTime = fileSpamTimeoutRef.current;
+    
+    if (lastTime && (now - lastTime) < 1000) {
+      fileSpamCountRef.current += 1;
+      if (fileSpamCountRef.current >= 4 && !fileSpamBlocked) {
+        setFileSpamBlocked(true);
+        setFileSpamTimer(30);
+        
+        const timerInterval = setInterval(() => {
+          setFileSpamTimer(prev => {
+            if (prev <= 1) {
+              clearInterval(timerInterval);
+              setFileSpamBlocked(false);
+              fileSpamCountRef.current = 0;
+              return 0;
+            }
+            return prev - 1;
+          });
+        }, 1000);
+        fileSpamCountTimeoutRef.current = timerInterval;
+        return false;
+      }
+    } else {
+      fileSpamCountRef.current = 1;
+    }
+    
+    if (fileSpamCountTimeoutRef.current && typeof fileSpamCountTimeoutRef.current !== 'number') {
+      clearTimeout(fileSpamCountTimeoutRef.current);
+    }
+    const timeout = setTimeout(() => {
+      fileSpamCountRef.current = 0;
+    }, 1000);
+    fileSpamCountTimeoutRef.current = timeout;
+    
+    fileSpamTimeoutRef.current = now;
+    return true;
   };
 
   const uploadAndSendFile = async (file) => {
     if (!activeChat) return;
     
+    // Проверка на спам-блокировку для файлов
+    if (fileSpamBlocked) {
+      alert(`⛔ Вы заблокированы за спам файлами! Подождите ${fileSpamTimer} секунд.`);
+      return;
+    }
+    
     const activeRoom = rooms.find(c => c.id === activeChat);
     if (!activeRoom) {
       alert("Комната не найдена");
+      return;
+    }
+
+    // Проверяем на спам для файлов
+    const canSend = checkFileSpam();
+
+    // Если после проверки нас заблокировали или нельзя отправить, не отправляем
+    if (!canSend || fileSpamBlocked) {
+      alert(`⛔ Вы заблокированы за спам файлами! Подождите ${fileSpamTimer} секунд.`);
       return;
     }
 
@@ -390,14 +511,40 @@ export default function ChatPage({ onNavigate, currentUser }) {
 
   useEffect(() => {
     fetchRooms();
+    
+    return () => {
+      if (spamCountTimeoutRef.current) {
+        clearTimeout(spamCountTimeoutRef.current);
+        clearInterval(spamCountTimeoutRef.current);
+      }
+      if (fileSpamCountTimeoutRef.current) {
+        clearTimeout(fileSpamCountTimeoutRef.current);
+        clearInterval(fileSpamCountTimeoutRef.current);
+      }
+    };
   }, []);
 
   const send = () => {
+    // Проверка на спам-блокировку для текста
+    if (spamBlocked) {
+      alert(`⛔ Вы заблокированы за спам! Подождите ${spamTimer} секунд.`);
+      return;
+    }
+    
     if (!input.trim() || !wsRef.current || !activeChat) return;
 
     const activeRoom = rooms.find(c => c.id === activeChat);
     if (!activeRoom) {
       alert("Комната не найдена");
+      return;
+    }
+
+    // Проверяем на спам для текста
+    const canSend = checkTextSpam();
+
+    // Если после проверки нас заблокировали или нельзя отправить, не отправляем
+    if (!canSend || spamBlocked) {
+      alert(`⛔ Вы заблокированы за спам! Подождите ${spamTimer} секунд.`);
       return;
     }
 
@@ -606,7 +753,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         <div style={styles.titleBar}>
           <div style={styles.titleBarText}>
             <span style={styles.titleIcon}>💬</span>
-            HUEssenger - Защищённый мессенджер
+            Ждун - Защищённый мессенджер
           </div>
           <div style={styles.titleBarButtons}>
             <button style={styles.titleButton}>?</button>
@@ -641,7 +788,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
                     <div style={styles.chatName}>{chat.displayName}</div>
                     <div style={styles.chatCode}>код: {chat.code}</div>
                   </div>
-                  <button onClick={(e) => { e.stopPropagation(); setEditingRoom(chat); setNewRoomName(chat.displayName); }} style={styles.chatSettingsBtn}>⚙️</button>
                   {unreadCounts[chat.id] > 0 && activeChat !== chat.id && (
                     <div style={styles.unreadBadge}>{unreadCounts[chat.id] > 9 ? "9+" : unreadCounts[chat.id]}</div>
                   )}
@@ -664,7 +810,6 @@ export default function ChatPage({ onNavigate, currentUser }) {
                   <div>
                     <div style={styles.chatHeaderTitle}>
                       <b>{currentRoom?.displayName}</b>
-                      <button onClick={() => { setEditingRoom(currentRoom); setNewRoomName(currentRoom?.displayName || ""); }} style={styles.renameBtn}>✏️</button>
                     </div>
                     <div style={styles.chatHeaderCode}>код: {currentRoomCode}</div>
                     <div style={styles.chatHeaderActions}>
@@ -706,22 +851,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         </div>
       </div>
 
-      {/* Модалки */}
-      {editingRoom && (
-        <div style={styles.modalOverlay}>
-          <div style={styles.modalWindow}>
-            <div style={styles.modalTitleBar}><span>✏️ Переименовать чат</span><button onClick={() => setEditingRoom(null)} style={styles.modalCloseBtn}>✕</button></div>
-            <div style={styles.modalContent}>
-              <input type="text" style={styles.modalInput} value={newRoomName} onChange={(e) => setNewRoomName(e.target.value)} placeholder="Название чата" autoFocus />
-              <div style={styles.modalButtons}>
-                <button onClick={() => setEditingRoom(null)} style={styles.modalButton}>Отмена</button>
-                <button onClick={handleRenameRoom} style={{...styles.modalButton, ...styles.modalButtonPrimary}}>Сохранить</button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* Контекстное меню */}
       {contextMenu.visible && (
         <div style={{ ...styles.contextMenu, top: contextMenu.y, left: contextMenu.x }}>
           <button onClick={() => handleDeleteMessage(contextMenu.message, false)} style={styles.contextMenuItem}>❌ Удалить только у себя</button>
@@ -729,6 +859,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         </div>
       )}
 
+      {/* Модалка ожидания */}
       {waitingApproval && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalWindow}>
@@ -742,6 +873,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         </div>
       )}
 
+      {/* Модалка входящего запроса/приглашения */}
       {incomingRequest && (
         <div style={styles.modalOverlay}>
           <div style={styles.modalWindow}>
@@ -753,6 +885,74 @@ export default function ChatPage({ onNavigate, currentUser }) {
                 <button onClick={() => handleApprove(false)} style={{...styles.modalButton, flex: 1}}>Отклонить</button>
                 <button onClick={() => handleApprove(true)} style={{...styles.modalButton, ...styles.modalButtonPrimary, flex: 1}}>Принять</button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модалка блокировки за спам (текст) */}
+      {spamBlocked && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalWindow}>
+            <div style={styles.modalTitleBar}>
+              <span>🚫 Блокировка за спам</span>
+            </div>
+            <div style={{ ...styles.modalContent, textAlign: "center" }}>
+              <div style={{ fontSize: "48px", marginBottom: "16px" }}>😴</div>
+              <h3 style={{ marginBottom: "16px" }}>Отдохни и не спамь!</h3>
+              <p style={{ marginBottom: "16px", fontSize: "14px" }}>
+                Вы отправили слишком много сообщений за короткое время.
+              </p>
+              <div style={{ 
+                fontSize: "36px", 
+                fontFamily: "monospace", 
+                fontWeight: "bold",
+                color: "#ff0000",
+                marginBottom: "16px"
+              }}>
+                {spamTimer} сек
+              </div>
+              <button 
+                onClick={() => {}} 
+                style={styles.modalButton}
+                disabled
+              >
+                Доступ заблокирован
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модалка блокировки за спам (файлы) */}
+      {fileSpamBlocked && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalWindow}>
+            <div style={styles.modalTitleBar}>
+              <span>🚫 Блокировка за спам (файлы)</span>
+            </div>
+            <div style={{ ...styles.modalContent, textAlign: "center" }}>
+              <div style={{ fontSize: "48px", marginBottom: "16px" }}>📎😴</div>
+              <h3 style={{ marginBottom: "16px" }}>Отдохни и не спамь файлами!</h3>
+              <p style={{ marginBottom: "16px", fontSize: "14px" }}>
+                Вы отправили слишком много файлов за короткое время.
+              </p>
+              <div style={{ 
+                fontSize: "36px", 
+                fontFamily: "monospace", 
+                fontWeight: "bold",
+                color: "#ff0000",
+                marginBottom: "16px"
+              }}>
+                {fileSpamTimer} сек
+              </div>
+              <button 
+                onClick={() => {}} 
+                style={styles.modalButton}
+                disabled
+              >
+                Доступ заблокирован
+              </button>
             </div>
           </div>
         </div>
@@ -934,15 +1134,6 @@ const styles = {
     opacity: 0.7,
     marginTop: '2px',
   },
-  chatSettingsBtn: {
-    backgroundColor: '#c0c0c0',
-    border: 'none',
-    fontSize: '11px',
-    cursor: 'pointer',
-    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
-    padding: '2px 4px',
-    marginRight: '4px',
-  },
   unreadBadge: {
     position: 'absolute',
     top: '4px',
@@ -955,6 +1146,7 @@ const styles = {
     fontWeight: 'bold',
     minWidth: '18px',
     textAlign: 'center',
+    zIndex: 5,
   },
   chatArea: {
     flex: 1,
@@ -997,14 +1189,6 @@ const styles = {
     fontSize: '14px',
     fontWeight: 'bold',
     color: '#000',
-  },
-  renameBtn: {
-    backgroundColor: '#c0c0c0',
-    border: 'none',
-    fontSize: '11px',
-    cursor: 'pointer',
-    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
-    padding: '2px 6px',
   },
   chatHeaderCode: {
     fontSize: '9px',
