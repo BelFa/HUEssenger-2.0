@@ -45,6 +45,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const [editingRoom, setEditingRoom] = useState(null);
   const [newRoomName, setNewRoomName] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [currentTime, setCurrentTime] = useState("");
 
   const wsRef = useRef(null);
   const activeChatRef = useRef(null);
@@ -54,6 +55,18 @@ export default function ChatPage({ onNavigate, currentUser }) {
   const fileInputRef = useRef(null);
 
   const myNick = currentUser?.username || "Guest";
+
+  // Реальное время для статус-бара
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      setCurrentTime(timeStr);
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const scrollToBottom = () => {
     if (messagesEndRef.current) {
@@ -565,7 +578,7 @@ export default function ChatPage({ onNavigate, currentUser }) {
         <img 
           src={`http://localhost:8080${msg.file_path}`} 
           alt="image" 
-          className="max-w-[200px] max-h-[200px] rounded-lg cursor-pointer"
+          style={{ maxWidth: "200px", maxHeight: "200px", borderRadius: "4px", cursor: "pointer", border: "inset 2px #808080" }}
           onClick={() => window.open(`http://localhost:8080${msg.file_path}`, '_blank')}
         />
       );
@@ -575,281 +588,643 @@ export default function ChatPage({ onNavigate, currentUser }) {
           href={`http://localhost:8080${msg.file_path}`} 
           target="_blank" 
           rel="noopener noreferrer"
-          className="text-blue-300 hover:text-blue-100 underline flex items-center gap-2"
+          style={{ color: "#0000FF", textDecoration: "underline", display: "flex", alignItems: "center", gap: "8px" }}
         >
           📄 PDF файл
         </a>
       );
     } else {
-      return <div className="break-words whitespace-pre-wrap">{decryptedText}</div>;
+      return <div style={{ wordBreak: "break-word", whiteSpace: "pre-wrap" }}>{decryptedText}</div>;
     }
   };
 
   return (
-    <div className="relative min-h-screen w-full flex overflow-hidden text-white font-sans">
-      <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600" />
-      <div className="relative flex w-full h-screen">
-        
-        {/* Боковая панель с чатами */}
-        <div className="w-72 bg-white/10 backdrop-blur-xl border-r border-white/20 flex flex-col h-full">
-          <div className="p-4 font-semibold text-lg border-b border-white/20 flex justify-between items-center flex-shrink-0">
-            <span onClick={() => setShowMenu(!showMenu)} className="cursor-pointer hover:opacity-80 transition">
-              Go Messenger {showMenu ? "←" : "▼"}
-            </span>
-            <button onClick={() => onNavigate("login")} className="text-sm opacity-70">Выход</button>
+    <div style={styles.desktop}>
+      <div style={styles.noise}></div>
+      
+      <div style={styles.mainWindow}>
+        <div style={styles.titleBar}>
+          <div style={styles.titleBarText}>
+            <span style={styles.titleIcon}>💬</span>
+            HUEssenger - Защищённый мессенджер
           </div>
-          
-          {showMenu && (
-            <div className="p-3 border-b border-white/20 bg-white/5">
-              <div className="space-y-2">
-                <input 
-                  className="w-full p-2 rounded-lg bg-white/10 border border-white/20 outline-none text-sm"
-                  placeholder="Ник пользователя" 
-                  value={inviteNick} 
-                  onChange={(e) => setInviteNick(e.target.value)} 
-                />
-                <button onClick={handleCreateRoom} className="w-full p-2 bg-indigo-500 font-bold rounded-lg hover:bg-indigo-600 transition text-sm">
-                  ➕ Создать комнату
-                </button>
-                <input 
-                  className="w-full p-2 rounded-lg bg-white/10 border border-white/20 outline-none text-sm"
-                  placeholder="Код комнаты" 
-                  value={joinCode} 
-                  onChange={(e) => setJoinCode(e.target.value)} 
-                />
-                <button onClick={handleJoinRoom} className="w-full p-2 bg-pink-500 font-bold rounded-lg hover:bg-pink-600 transition text-sm">
-                  🔑 Вступить по коду
-                </button>
-              </div>
-            </div>
-          )}
-          
-          <div className="flex-1 overflow-y-auto p-2 custom-scroll">
-            {rooms.length === 0 && !showMenu && <div className="p-4 text-center opacity-50">Нет чатов</div>}
-            {rooms.map((chat) => (
-              <div key={chat.id} onClick={() => setActiveChat(chat.id)}
-                className={`p-3 rounded-xl cursor-pointer mb-1 transition relative ${activeChat === chat.id ? "bg-white/20" : "hover:bg-white/10"}`}>
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <div className="font-medium">{chat.displayName}</div>
-                    <div className="text-[8px] opacity-40 mt-0.5">код: {chat.code}</div>
-                  </div>
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setEditingRoom(chat);
-                      setNewRoomName(chat.displayName);
-                    }}
-                    className="opacity-50 hover:opacity-100 transition text-xs ml-2"
-                  >
-                    ⚙️
-                  </button>
-                </div>
-                {unreadCounts[chat.id] > 0 && activeChat !== chat.id && (
-                  <div className="absolute top-2 right-2 bg-red-500 rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-bold">
-                    {unreadCounts[chat.id] > 9 ? "9+" : unreadCounts[chat.id]}
-                  </div>
-                )}
-              </div>
-            ))}
+          <div style={styles.titleBarButtons}>
+            <button style={styles.titleButton}>?</button>
+            <button style={styles.titleButton} onClick={() => onNavigate("login")}>✕</button>
           </div>
         </div>
 
-        {editingRoom && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-            <div className="bg-gray-900 border border-indigo-500/50 rounded-2xl p-6 w-96 shadow-2xl">
-              <h3 className="text-xl font-bold mb-4">Переименовать чат</h3>
-              <input 
-                className="w-full mb-4 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
-                value={newRoomName} 
-                onChange={(e) => setNewRoomName(e.target.value)}
-                placeholder="Название чата"
-                autoFocus
-              />
-              <div className="flex gap-3">
-                <button 
-                  onClick={() => setEditingRoom(null)}
-                  className="flex-1 p-3 bg-white/10 rounded-xl hover:bg-red-500/50 transition"
-                >
-                  Отмена
-                </button>
-                <button 
-                  onClick={handleRenameRoom}
-                  className="flex-1 p-3 bg-indigo-500 font-bold rounded-xl hover:bg-indigo-600 transition"
-                >
-                  Сохранить
-                </button>
+        <div style={styles.mainContent}>
+          {/* Боковая панель */}
+          <div style={styles.sidebar}>
+            <div style={styles.sidebarHeader}>
+              <span style={styles.sidebarTitle}>📁 Чаты</span>
+              <button onClick={() => setShowMenu(!showMenu)} style={styles.sidebarButton}>
+                {showMenu ? "←" : "▼"}
+              </button>
+            </div>
+            
+            {showMenu && (
+              <div style={styles.menuPanel}>
+                <input type="text" style={styles.menuInput} placeholder="Ник пользователя" value={inviteNick} onChange={(e) => setInviteNick(e.target.value)} />
+                <button onClick={handleCreateRoom} style={styles.menuButton}>➕ Создать комнату</button>
+                <input type="text" style={styles.menuInput} placeholder="Код комнаты" value={joinCode} onChange={(e) => setJoinCode(e.target.value)} />
+                <button onClick={handleJoinRoom} style={styles.menuButton}>🔑 Вступить по коду</button>
               </div>
+            )}
+            
+            <div style={styles.chatList}>
+              {rooms.length === 0 && !showMenu && <div style={styles.emptyChats}>Нет чатов</div>}
+              {rooms.map((chat) => (
+                <div key={chat.id} onClick={() => setActiveChat(chat.id)} style={{ ...styles.chatItem, ...(activeChat === chat.id ? styles.chatItemActive : {}) }}>
+                  <div style={styles.chatItemContent}>
+                    <div style={styles.chatName}>{chat.displayName}</div>
+                    <div style={styles.chatCode}>код: {chat.code}</div>
+                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); setEditingRoom(chat); setNewRoomName(chat.displayName); }} style={styles.chatSettingsBtn}>⚙️</button>
+                  {unreadCounts[chat.id] > 0 && activeChat !== chat.id && (
+                    <div style={styles.unreadBadge}>{unreadCounts[chat.id] > 9 ? "9+" : unreadCounts[chat.id]}</div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
-        )}
 
-        {/* Основная область чата */}
-        <div className="flex-1 flex flex-col h-full">
-          {!activeChat ? (
-            <div className="flex-1 flex items-center justify-center bg-black/10">
-              <div className="text-center">
-                <p className="text-lg opacity-70">Выберите чат из списка</p>
-                <p className="text-sm opacity-50 mt-2">или нажмите Go Messenger чтобы создать новый</p>
+          {/* Область чата */}
+          <div style={styles.chatArea}>
+            {!activeChat ? (
+              <div style={styles.noChatSelected}>
+                <div style={styles.noChatIcon}>💬</div>
+                <div>Выберите чат из списка</div>
+                <div style={styles.noChatSubtext}>или нажмите ▼ чтобы создать новый</div>
               </div>
-            </div>
-          ) : (
-            <>
-              <div className="p-4 border-b border-white/20 backdrop-blur-xl bg-white/5 flex justify-between items-center flex-shrink-0">
-                <div className="flex flex-col">
-                  <div className="flex items-center gap-2">
-                    <b className="text-lg">{currentRoom?.displayName}</b>
-                    <button 
-                      onClick={() => {
-                        setEditingRoom(currentRoom);
-                        setNewRoomName(currentRoom?.displayName || "");
-                      }}
-                      className="opacity-50 hover:opacity-100 transition text-xs"
-                    >
-                      ✏️
-                    </button>
-                  </div>
-                  <div className="text-[10px] opacity-50 mt-0.5">код: {currentRoomCode}</div>
-                  <div className="flex gap-2 mt-2">
-                    <button onClick={() => handleDeleteRoom(activeChat, "me")} className="text-[10px] uppercase bg-white/10 px-2 py-1 rounded hover:bg-orange-500">Покинуть</button>
-                    <button onClick={() => handleDeleteRoom(activeChat, "all")} className="text-[10px] uppercase bg-white/10 px-2 py-1 rounded hover:bg-red-500">Удалить чат</button>
-                  </div>
-                </div>
-                <span className="text-sm opacity-70">🔒 E2EE Активно</span>
-              </div>
-
-              <div 
-                ref={messagesContainerRef}
-                className="flex-1 overflow-y-auto p-4 bg-black/10 flex flex-col space-y-3 custom-scroll"
-              >
-                {uploading && (
-                  <div className="flex justify-center">
-                    <div className="bg-white/20 px-4 py-2 rounded-full text-sm">
-                      📤 Загрузка файла...
+            ) : (
+              <>
+                <div style={styles.chatHeader}>
+                  <div>
+                    <div style={styles.chatHeaderTitle}>
+                      <b>{currentRoom?.displayName}</b>
+                      <button onClick={() => { setEditingRoom(currentRoom); setNewRoomName(currentRoom?.displayName || ""); }} style={styles.renameBtn}>✏️</button>
+                    </div>
+                    <div style={styles.chatHeaderCode}>код: {currentRoomCode}</div>
+                    <div style={styles.chatHeaderActions}>
+                      <button onClick={() => handleDeleteRoom(activeChat, "me")} style={styles.actionButton}>Покинуть</button>
+                      <button onClick={() => handleDeleteRoom(activeChat, "all")} style={{...styles.actionButton, ...styles.dangerButton}}>Удалить чат</button>
                     </div>
                   </div>
-                )}
-                {messages.map((m, i) => (
-                  <div 
-                    key={i} 
-                    className={`flex flex-col ${m.isMe ? "items-end" : "items-start"}`}
-                    onContextMenu={(e) => handleContextMenu(e, m)}
-                  >
-                    <span className="text-sm font-semibold opacity-80 mb-1 px-2">{m.sender}</span>
-                    <div className={`max-w-[70%] px-4 py-2 rounded-2xl ${m.isMe ? "bg-indigo-500" : "bg-white/20"} cursor-context-menu`}>
-                      {renderMessageContent(m)}
-                      <div className="text-[9px] opacity-50 text-right mt-1">
-                        {m.created_at || "—"}
+                  <div style={styles.encryptionBadge}>🔒 E2EE</div>
+                </div>
+
+                <div ref={messagesContainerRef} style={styles.messagesArea}>
+                  {uploading && <div style={styles.uploadingIndicator}>📤 Загрузка файла...</div>}
+                  {messages.map((m, i) => (
+                    <div key={i} style={{ ...styles.messageRow, ...(m.isMe ? styles.messageRowMe : styles.messageRowOther) }} onContextMenu={(e) => handleContextMenu(e, m)}>
+                      <span style={styles.messageSender}>{m.sender}</span>
+                      <div style={{ ...styles.messageBubble, ...(m.isMe ? styles.messageBubbleMe : styles.messageBubbleOther) }}>
+                        {renderMessageContent(m)}
+                        <div style={styles.messageTime}>{m.created_at || "—"}</div>
                       </div>
                     </div>
-                  </div>
-                ))}
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* Поле ввода со скрепкой */}
-              <div className="p-4 bg-white/5 backdrop-blur-xl border-t border-white/20 flex gap-3 flex-shrink-0 items-center">
-                <button 
-                  onClick={() => fileInputRef.current?.click()}
-                  className="opacity-70 hover:opacity-100 transition text-2xl bg-white/10 p-2 rounded-full w-10 h-10 flex items-center justify-center flex-shrink-0"
-                  disabled={uploading}
-                  title="Прикрепить файл (изображение или PDF до 5МБ)"
-                >
-                  📎
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*,application/pdf"
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
-                <input 
-                  className="flex-1 p-3 rounded-xl bg-white/10 border border-white/20 outline-none"
-                  value={input} 
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && send()} 
-                  placeholder="Ваше сообщение..." 
-                />
-                <button 
-                  onClick={send} 
-                  className="px-6 py-3 bg-white text-indigo-600 font-bold rounded-xl hover:bg-indigo-100 transition"
-                >
-                  Отправить
-                </button>
-              </div>
-            </>
-          )}
-
-          {/* Контекстное меню */}
-          {contextMenu.visible && (
-            <div 
-              className="fixed bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 overflow-hidden"
-              style={{ top: contextMenu.y, left: contextMenu.x }}
-            >
-              <button 
-                onClick={() => handleDeleteMessage(contextMenu.message, false)}
-                className="block w-full px-4 py-2 text-left text-gray-300 hover:bg-gray-700 transition text-sm"
-              >
-                ❌ Удалить только у себя
-              </button>
-              <button 
-                onClick={() => handleDeleteMessage(contextMenu.message, true)}
-                className="block w-full px-4 py-2 text-left text-red-400 hover:bg-red-500/20 transition text-sm"
-              >
-                🗑 Удалить для всех
-              </button>
-            </div>
-          )}
-
-          {/* Модалка ожидания */}
-          {waitingApproval && (
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-              <div className="bg-gray-900 border border-white/20 rounded-3xl p-8 w-80 text-center shadow-2xl">
-                <img src={zhdun} alt="waiting" className="w-32 mx-auto mb-4 animate-pulse" />
-                <h3 className="text-xl font-bold mb-2">Ждем ответа...</h3>
-                <button onClick={() => setWaitingApproval(false)} className="w-full p-2 text-white/30 hover:text-white transition">Отмена</button>
-              </div>
-            </div>
-          )}
-
-          {/* Модалка входящего запроса/приглашения */}
-          {incomingRequest && (
-            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-              <div className="bg-gray-900 border border-indigo-500/50 rounded-3xl p-8 w-80 text-center shadow-2xl">
-                <h3 className="text-xl font-bold mb-2">
-                  {incomingRequest.type === "invite" ? "Вас пригласили!" : "Запрос на вход!"}
-                </h3>
-                <p className="text-white/80 mb-4">От: <b>{incomingRequest.username}</b></p>
-                <div className="text-4xl font-mono text-pink-400 mb-6 font-bold">
-                  00:{incomingRequest.timeLeft.toString().padStart(2, '0')}
+                  ))}
+                  <div ref={messagesEndRef} />
                 </div>
-                <div className="flex gap-3">
-                  <button onClick={() => handleApprove(false)} className="flex-1 p-3 bg-white/10 rounded-xl hover:bg-red-500/50 transition">Отклонить</button>
-                  <button onClick={() => handleApprove(true)} className="flex-1 p-3 bg-indigo-500 font-bold rounded-xl hover:bg-indigo-600 transition">Принять</button>
+
+                <div style={styles.inputArea}>
+                  <button onClick={() => fileInputRef.current?.click()} style={styles.attachButton} disabled={uploading} title="Прикрепить файл (изображение или PDF до 5МБ)">📎</button>
+                  <input ref={fileInputRef} type="file" accept="image/*,application/pdf" onChange={handleFileSelect} style={{ display: "none" }} />
+                  <input type="text" style={styles.messageInput} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} placeholder="Введите сообщение..." />
+                  <button onClick={send} style={styles.sendButton}>Отправить →</button>
                 </div>
-              </div>
-            </div>
-          )}
+              </>
+            )}
+          </div>
+        </div>
+
+        <div style={styles.statusBar}>
+          <span style={styles.statusText}>{activeChat ? `Чат: ${currentRoom?.displayName}` : "Готов"}</span>
+          <span style={styles.statusTime}>{currentTime}</span>
         </div>
       </div>
 
-      <style jsx>{`
-        .custom-scroll::-webkit-scrollbar {
-          width: 6px;
-        }
-        .custom-scroll::-webkit-scrollbar-track {
-          background: rgba(255, 255, 255, 0.1);
-          border-radius: 10px;
-        }
-        .custom-scroll::-webkit-scrollbar-thumb {
-          background: rgba(255, 255, 255, 0.3);
-          border-radius: 10px;
-        }
-        .custom-scroll::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 255, 255, 0.5);
-        }
-      `}</style>
+      {/* Модалки */}
+      {editingRoom && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalWindow}>
+            <div style={styles.modalTitleBar}><span>✏️ Переименовать чат</span><button onClick={() => setEditingRoom(null)} style={styles.modalCloseBtn}>✕</button></div>
+            <div style={styles.modalContent}>
+              <input type="text" style={styles.modalInput} value={newRoomName} onChange={(e) => setNewRoomName(e.target.value)} placeholder="Название чата" autoFocus />
+              <div style={styles.modalButtons}>
+                <button onClick={() => setEditingRoom(null)} style={styles.modalButton}>Отмена</button>
+                <button onClick={handleRenameRoom} style={{...styles.modalButton, ...styles.modalButtonPrimary}}>Сохранить</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {contextMenu.visible && (
+        <div style={{ ...styles.contextMenu, top: contextMenu.y, left: contextMenu.x }}>
+          <button onClick={() => handleDeleteMessage(contextMenu.message, false)} style={styles.contextMenuItem}>❌ Удалить только у себя</button>
+          <button onClick={() => handleDeleteMessage(contextMenu.message, true)} style={styles.contextMenuItem}>🗑 Удалить для всех</button>
+        </div>
+      )}
+
+      {waitingApproval && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalWindow}>
+            <div style={styles.modalTitleBar}><span>⏳ Ожидание ответа</span></div>
+            <div style={{ ...styles.modalContent, textAlign: "center" }}>
+              <img src={zhdun} alt="waiting" style={{ width: "80px", margin: "10px auto" }} />
+              <h3>Ждем ответа...</h3>
+              <button onClick={() => setWaitingApproval(false)} style={styles.modalButton}>Отмена</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {incomingRequest && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalWindow}>
+            <div style={styles.modalTitleBar}><span>{incomingRequest.type === "invite" ? "📩 Вас пригласили!" : "🔔 Запрос на вход!"}</span></div>
+            <div style={styles.modalContent}>
+              <p>От: <b>{incomingRequest.username}</b></p>
+              <div style={{ fontSize: "32px", fontFamily: "monospace", textAlign: "center", margin: "10px 0" }}>00:{incomingRequest.timeLeft.toString().padStart(2, '0')}</div>
+              <div style={{ display: "flex", gap: "10px", marginTop: "10px" }}>
+                <button onClick={() => handleApprove(false)} style={{...styles.modalButton, flex: 1}}>Отклонить</button>
+                <button onClick={() => handleApprove(true)} style={{...styles.modalButton, ...styles.modalButtonPrimary, flex: 1}}>Принять</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+// Стили Windows 95
+const styles = {
+  desktop: {
+    position: 'relative',
+    width: '100vw',
+    height: '100vh',
+    background: '#008080',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontFamily: '"Microsoft Sans Serif", "MS Sans Serif", "Segoe UI", Tahoma, sans-serif',
+    overflow: 'hidden',
+  },
+  noise: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    backgroundImage: 'radial-gradient(rgba(0,0,0,0.1) 1px, transparent 1px)',
+    backgroundSize: '4px 4px',
+    pointerEvents: 'none',
+    zIndex: 0,
+  },
+  mainWindow: {
+    position: 'relative',
+    zIndex: 1,
+    width: '90vw',
+    height: '85vh',
+    backgroundColor: '#c0c0c0',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #dfdfdf, inset -2px -2px 0 #808080, inset 2px 2px 0 #ffffff',
+    border: 'none',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  titleBar: {
+    background: '#000080',
+    padding: '4px 6px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: '13px',
+    flexShrink: 0,
+  },
+  titleBarText: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  titleIcon: {
+    fontSize: '14px',
+  },
+  titleBarButtons: {
+    display: 'flex',
+    gap: '2px',
+  },
+  titleButton: {
+    width: '18px',
+    height: '18px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    fontWeight: 'bold',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    color: '#000',
+  },
+  mainContent: {
+    display: 'flex',
+    flex: 1,
+    overflow: 'hidden',
+    padding: '4px',
+    gap: '4px',
+  },
+  sidebar: {
+    width: '260px',
+    backgroundColor: '#c0c0c0',
+    border: 'inset 2px #808080',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  sidebarHeader: {
+    padding: '8px',
+    backgroundColor: '#c0c0c0',
+    borderBottom: 'outset 1px #ffffff',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    fontWeight: 'bold',
+    fontSize: '12px',
+  },
+  sidebarTitle: {
+    color: '#000',
+  },
+  sidebarButton: {
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '12px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    padding: '2px 6px',
+  },
+  menuPanel: {
+    padding: '8px',
+    borderBottom: 'inset 1px #808080',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+  },
+  menuInput: {
+    padding: '4px 6px',
+    backgroundColor: '#ffffff',
+    border: 'inset 2px #808080',
+    fontSize: '11px',
+    fontFamily: '"Courier New", monospace',
+    outline: 'none',
+  },
+  menuButton: {
+    padding: '4px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    textAlign: 'center',
+  },
+  chatList: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '4px',
+  },
+  emptyChats: {
+    textAlign: 'center',
+    color: '#808080',
+    padding: '20px',
+    fontSize: '11px',
+  },
+  chatItem: {
+    padding: '8px',
+    marginBottom: '2px',
+    cursor: 'pointer',
+    border: 'outset 1px #ffffff',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  chatItemActive: {
+    background: '#000080',
+    border: 'inset 1px #808080',
+    color: 'white',
+  },
+  chatItemContent: {
+    flex: 1,
+  },
+  chatName: {
+    fontSize: '12px',
+    fontWeight: 'bold',
+    color: 'inherit',
+  },
+  chatCode: {
+    fontSize: '9px',
+    color: 'inherit',
+    opacity: 0.7,
+    marginTop: '2px',
+  },
+  chatSettingsBtn: {
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    padding: '2px 4px',
+    marginRight: '4px',
+  },
+  unreadBadge: {
+    position: 'absolute',
+    top: '4px',
+    right: '4px',
+    backgroundColor: '#ff0000',
+    color: 'white',
+    borderRadius: '12px',
+    padding: '2px 6px',
+    fontSize: '10px',
+    fontWeight: 'bold',
+    minWidth: '18px',
+    textAlign: 'center',
+  },
+  chatArea: {
+    flex: 1,
+    backgroundColor: '#c0c0c0',
+    border: 'inset 2px #808080',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  noChatSelected: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: '#808080',
+    fontSize: '14px',
+  },
+  noChatIcon: {
+    fontSize: '48px',
+    marginBottom: '16px',
+  },
+  noChatSubtext: {
+    fontSize: '11px',
+    marginTop: '8px',
+  },
+  chatHeader: {
+    padding: '8px 12px',
+    backgroundColor: '#c0c0c0',
+    borderBottom: 'outset 2px #ffffff',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    flexShrink: 0,
+  },
+  chatHeaderTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+    color: '#000',
+  },
+  renameBtn: {
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    padding: '2px 6px',
+  },
+  chatHeaderCode: {
+    fontSize: '9px',
+    color: '#808080',
+    marginTop: '4px',
+  },
+  chatHeaderActions: {
+    display: 'flex',
+    gap: '8px',
+    marginTop: '8px',
+  },
+  actionButton: {
+    padding: '2px 8px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '9px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    textTransform: 'uppercase',
+  },
+  dangerButton: {
+    color: '#800000',
+  },
+  encryptionBadge: {
+    fontSize: '11px',
+    color: '#008080',
+    backgroundColor: '#e0e0e0',
+    padding: '2px 6px',
+    border: 'inset 1px #808080',
+  },
+  messagesArea: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: '12px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+    backgroundColor: '#ffffff',
+  },
+  uploadingIndicator: {
+    textAlign: 'center',
+    padding: '8px',
+    backgroundColor: '#c0c0c0',
+    border: 'inset 1px #808080',
+    fontSize: '11px',
+    marginBottom: '8px',
+  },
+  messageRow: {
+    display: 'flex',
+    flexDirection: 'column',
+    maxWidth: '70%',
+  },
+  messageRowMe: {
+    alignSelf: 'flex-end',
+  },
+  messageRowOther: {
+    alignSelf: 'flex-start',
+  },
+  messageSender: {
+    fontSize: '10px',
+    color: '#808080',
+    marginBottom: '2px',
+    paddingLeft: '4px',
+  },
+  messageBubble: {
+    padding: '8px 12px',
+    border: 'outset 2px #ffffff',
+    position: 'relative',
+  },
+  messageBubbleMe: {
+    backgroundColor: '#c0c0c0',
+  },
+  messageBubbleOther: {
+    backgroundColor: '#e0e0e0',
+  },
+  messageTime: {
+    fontSize: '8px',
+    color: '#808080',
+    textAlign: 'right',
+    marginTop: '4px',
+  },
+  inputArea: {
+    padding: '8px',
+    backgroundColor: '#c0c0c0',
+    borderTop: 'outset 2px #ffffff',
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+  attachButton: {
+    width: '32px',
+    height: '32px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '18px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  messageInput: {
+    flex: 1,
+    padding: '6px 8px',
+    backgroundColor: '#ffffff',
+    border: 'inset 2px #808080',
+    fontSize: '12px',
+    fontFamily: '"Courier New", monospace',
+    outline: 'none',
+  },
+  sendButton: {
+    padding: '6px 16px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '12px',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+  },
+  statusBar: {
+    background: '#c0c0c0',
+    borderTop: 'inset 1px #808080',
+    padding: '3px 6px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: '11px',
+    color: '#000',
+    flexShrink: 0,
+  },
+  statusText: {
+    fontStyle: 'italic',
+  },
+  statusTime: {
+    fontFamily: '"Courier New", monospace',
+  },
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+  },
+  modalWindow: {
+    width: '350px',
+    backgroundColor: '#c0c0c0',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #dfdfdf, inset -2px -2px 0 #808080, inset 2px 2px 0 #ffffff',
+  },
+  modalTitleBar: {
+    background: '#000080',
+    padding: '6px 8px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: '12px',
+  },
+  modalCloseBtn: {
+    width: '18px',
+    height: '18px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    color: '#000',
+  },
+  modalContent: {
+    padding: '16px',
+  },
+  modalInput: {
+    width: '100%',
+    padding: '6px 8px',
+    backgroundColor: '#ffffff',
+    border: 'inset 2px #808080',
+    fontSize: '12px',
+    fontFamily: '"Courier New", monospace',
+    outline: 'none',
+    marginBottom: '16px',
+    boxSizing: 'border-box',
+  },
+  modalButtons: {
+    display: 'flex',
+    gap: '10px',
+    justifyContent: 'flex-end',
+  },
+  modalButton: {
+    padding: '4px 12px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+  },
+  modalButtonPrimary: {
+    fontWeight: 'bold',
+    color: '#000080',
+  },
+  contextMenu: {
+    position: 'fixed',
+    backgroundColor: '#c0c0c0',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    zIndex: 1001,
+    minWidth: '160px',
+  },
+  contextMenuItem: {
+    display: 'block',
+    width: '100%',
+    padding: '6px 12px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    textAlign: 'left',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
+  },
+};

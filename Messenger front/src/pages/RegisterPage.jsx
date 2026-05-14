@@ -2,20 +2,28 @@ import { useState, useRef, useEffect } from "react";
 
 export default function RegisterPage({ onRegisterSuccess, onNavigate }) {
   const [step, setStep] = useState(1);
-
-  // Шаг 1
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-
-  // Шаг 2
   const [codeDigits, setCodeDigits] = useState(["", "", "", "", "", ""]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
+  const [currentTime, setCurrentTime] = useState("");
 
   const inputRefs = useRef([]);
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+      setCurrentTime(timeStr);
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (step === 2 && inputRefs.current[0]) {
@@ -102,144 +110,354 @@ export default function RegisterPage({ onRegisterSuccess, onNavigate }) {
   };
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      height: '100vh',
-      background: '#1a1a1a',
-      color: 'white',
-      fontFamily: 'sans-serif'
-    }}>
-      <div style={{
-        background: '#2a2a2a',
-        padding: '2.5rem 2rem',
-        borderRadius: '16px',
-        boxShadow: '0 10px 30px rgba(0,0,0,0.5)',
-        width: '380px'
-      }}>
-        <h2 style={{ textAlign: 'center', marginBottom: '20px' }}>
-          {step === 1 ? "Регистрация" : "Подтверждение email"}
-        </h2>
-
-        {error && (
-          <div style={{
-            color: '#ff6b6b',
-            background: 'rgba(255,107,107,0.15)',
-            padding: '12px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            textAlign: 'center'
-          }}>
-            {error}
+    <div style={styles.desktop}>
+      <div style={styles.noise}></div>
+      
+      <div style={styles.window}>
+        <div style={styles.titleBar}>
+          <div style={styles.titleBarText}>
+            <span style={styles.titleIcon}>📟</span>
+            Регистрация
           </div>
-        )}
-
-        {successMessage && (
-          <div style={{
-            color: '#4ade80',
-            background: 'rgba(74,222,128,0.15)',
-            padding: '12px',
-            borderRadius: '8px',
-            marginBottom: '15px',
-            textAlign: 'center'
-          }}>
-            {successMessage}
+          <div style={styles.titleBarButtons}>
+            <button style={styles.titleButton}>?</button>
+            <button style={styles.titleButton}>✕</button>
           </div>
-        )}
+        </div>
 
-        {step === 1 && (
-          <form onSubmit={handleRegister}>
-            <input style={inputStyle} placeholder="Никнейм" value={username} onChange={(e) => setUsername(e.target.value)} required />
-            <input style={inputStyle} type="email" placeholder="Электронная почта" value={email} onChange={(e) => setEmail(e.target.value)} required />
-            <input style={inputStyle} type="password" placeholder="Пароль" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            <input style={inputStyle} type="password" placeholder="Повторите пароль" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required />
+        <div style={styles.windowContent}>
+          {step === 1 ? (
+            <form onSubmit={handleRegister}>
+              <div style={styles.fieldGroup}>
+                <div style={styles.fieldRow}>
+                  <label style={styles.label}>👤 Никнейм:</label>
+                  <input
+                    type="text"
+                    style={styles.input}
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                  />
+                </div>
+                <div style={styles.fieldRow}>
+                  <label style={styles.label}>📧 Электронная почта:</label>
+                  <input
+                    type="email"
+                    style={styles.input}
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <div style={styles.fieldRow}>
+                  <label style={styles.label}>🔒 Пароль:</label>
+                  <input
+                    type="password"
+                    style={styles.input}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                <div style={styles.fieldRow}>
+                  <label style={styles.label}>🔒 Повторите пароль:</label>
+                  <input
+                    type="password"
+                    style={styles.input}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                  />
+                </div>
+              </div>
 
-            <button style={buttonStyle} type="submit" disabled={loading}>
-              {loading ? "Отправка..." : "Получить код"}
-            </button>
-          </form>
-        )}
+              {error && (
+                <div style={styles.errorBox}>
+                  <span style={styles.errorIcon}>⚠️</span>
+                  <span>{error}</span>
+                </div>
+              )}
 
-        {step === 2 && (
-          <div>
-            <p style={{ textAlign: 'center', marginBottom: '20px', opacity: 0.8 }}>
-              Код отправлен на <b>{email}</b>
-            </p>
+              {successMessage && (
+                <div style={styles.successBox}>
+                  <span style={styles.successIcon}>✓</span>
+                  <span>{successMessage}</span>
+                </div>
+              )}
 
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', margin: '20px 0' }}>
-              {codeDigits.map((digit, index) => (
-                <input
-                  key={index}
-                  ref={el => inputRefs.current[index] = el}
-                  type="text"
-                  maxLength="1"
-                  value={digit}
-                  onChange={(e) => handleCodeChange(index, e.target.value)}
-                  style={codeInputStyle}
-                />
-              ))}
+              <div style={styles.buttonRow}>
+                <button 
+                  type="button" 
+                  style={styles.button}
+                  onClick={() => onNavigate("login")}
+                >
+                  Отмена
+                </button>
+                <button 
+                  type="submit" 
+                  style={styles.button}
+                  disabled={loading}
+                >
+                  {loading ? "Отправка..." : "Получить код →"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div>
+              <div style={styles.infoBox}>
+                <span style={styles.infoIcon}>📨</span>
+                <span>Код подтверждения отправлен на <b>{email}</b></span>
+              </div>
+
+              <div style={styles.codeGroup}>
+                <label style={styles.label}>Введите 6-значный код:</label>
+                <div style={styles.codeInputs}>
+                  {codeDigits.map((digit, index) => (
+                    <input
+                      key={index}
+                      ref={el => inputRefs.current[index] = el}
+                      type="text"
+                      maxLength="1"
+                      value={digit}
+                      onChange={(e) => handleCodeChange(index, e.target.value)}
+                      style={styles.codeInput}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {error && (
+                <div style={styles.errorBox}>
+                  <span style={styles.errorIcon}>⚠️</span>
+                  <span>{error}</span>
+                </div>
+              )}
+
+              <div style={styles.buttonRow}>
+                <button 
+                  style={styles.button}
+                  onClick={() => setStep(1)}
+                >
+                  ← Назад
+                </button>
+                <button 
+                  style={styles.button}
+                  onClick={handleConfirmCode}
+                  disabled={loading || codeDigits.join("").length !== 6}
+                >
+                  {loading ? "Проверка..." : "Подтвердить →"}
+                </button>
+              </div>
             </div>
+          )}
+        </div>
 
-            <button style={buttonStyle} onClick={handleConfirmCode} disabled={loading || codeDigits.join("").length !== 6}>
-              {loading ? "Проверка..." : "Подтвердить"}
-            </button>
-
-            <button 
-              style={{ marginTop: '15px', background: 'transparent', color: '#aaa', border: 'none', cursor: 'pointer' }}
-              onClick={() => setStep(1)}
-            >
-              ← Изменить данные
-            </button>
-          </div>
-        )}
-
-        <p 
-          style={{ textAlign: 'center', marginTop: '20px', cursor: 'pointer', color: '#aaa' }}
-          onClick={() => onNavigate("login")}
-        >
-          Уже есть аккаунт? <b>Войти</b>
-        </p>
+        <div style={styles.statusBar}>
+          <span style={styles.statusText}>
+            {step === 1 ? "Заполните форму регистрации" : "Введите код из письма"}
+          </span>
+          <span style={styles.statusTime}>{currentTime}</span>
+        </div>
       </div>
     </div>
   );
 }
 
-// Стили
-const inputStyle = {
-  padding: "14px",
-  borderRadius: "8px",
-  border: "1px solid #444",
-  background: "#333",
-  color: "white",
-  outline: "none",
-  fontSize: "16px",
-  width: "100%",
-  marginBottom: "12px"
-};
-
-const buttonStyle = {
-  padding: "14px",
-  borderRadius: "8px",
-  border: "none",
-  background: "#5d5fef",
-  color: "white",
-  fontWeight: "bold",
-  fontSize: "16px",
-  width: "100%",
-  cursor: "pointer",
-  marginTop: "10px"
-};
-
-const codeInputStyle = {
-  width: "48px",
-  height: "58px",
-  textAlign: "center",
-  fontSize: "28px",
-  fontWeight: "bold",
-  border: "2px solid #555",
-  borderRadius: "10px",
-  background: "#222",
-  color: "white",
+const styles = {
+  desktop: {
+    position: 'relative',
+    width: '100vw',
+    height: '100vh',
+    background: '#008080',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontFamily: '"Microsoft Sans Serif", "MS Sans Serif", "Segoe UI", Tahoma, sans-serif',
+    overflow: 'hidden',
+  },
+  noise: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    backgroundImage: 'radial-gradient(rgba(0,0,0,0.1) 1px, transparent 1px)',
+    backgroundSize: '4px 4px',
+    pointerEvents: 'none',
+    zIndex: 0,
+  },
+  window: {
+    position: 'relative',
+    zIndex: 1,
+    width: '450px',
+    backgroundColor: '#c0c0c0',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #dfdfdf, inset -2px -2px 0 #808080, inset 2px 2px 0 #ffffff',
+    border: 'none',
+  },
+  titleBar: {
+    background: '#000080',
+    padding: '4px 6px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: '13px',
+    letterSpacing: '0.5px',
+  },
+  titleBarText: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+  },
+  titleIcon: {
+    fontSize: '14px',
+  },
+  titleBarButtons: {
+    display: 'flex',
+    gap: '2px',
+  },
+  titleButton: {
+    width: '18px',
+    height: '18px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '11px',
+    fontWeight: 'bold',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    color: '#000',
+    background: '#c0c0c0',
+  },
+  windowContent: {
+    padding: '20px',
+  },
+  fieldGroup: {
+    marginBottom: '20px',
+    padding: '10px',
+    border: 'inset 2px #808080',
+    background: '#c0c0c0',
+  },
+  fieldRow: {
+    marginBottom: '12px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  label: {
+    width: '140px',
+    fontSize: '12px',
+    fontWeight: 'bold',
+    color: '#000',
+  },
+  input: {
+    flex: 1,
+    padding: '4px 6px',
+    backgroundColor: '#ffffff',
+    border: 'inset 2px #808080',
+    fontSize: '12px',
+    fontFamily: '"Courier New", monospace',
+    outline: 'none',
+  },
+  buttonRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '10px',
+    marginTop: '20px',
+  },
+  button: {
+    padding: '6px 16px',
+    backgroundColor: '#c0c0c0',
+    border: 'none',
+    fontSize: '12px',
+    fontWeight: 'bold',
+    fontFamily: 'inherit',
+    cursor: 'pointer',
+    boxShadow: 'inset -1px -1px 0 #0a0a0a, inset 1px 1px 0 #ffffff',
+    color: '#000',
+    minWidth: '90px',
+  },
+  errorBox: {
+    backgroundColor: '#c0c0c0',
+    border: 'inset 2px #808080',
+    padding: '8px',
+    marginBottom: '15px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '12px',
+    color: '#800000',
+    fontWeight: 'bold',
+  },
+  successBox: {
+    backgroundColor: '#c0c0c0',
+    border: 'inset 2px #808080',
+    padding: '8px',
+    marginBottom: '15px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    fontSize: '12px',
+    color: '#006400',
+    fontWeight: 'bold',
+  },
+  errorIcon: {
+    fontSize: '14px',
+  },
+  successIcon: {
+    fontSize: '14px',
+  },
+  infoBox: {
+    backgroundColor: '#c0c0c0',
+    border: 'inset 2px #808080',
+    padding: '10px',
+    marginBottom: '20px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    fontSize: '12px',
+    color: '#000',
+  },
+  infoIcon: {
+    fontSize: '18px',
+  },
+  codeGroup: {
+    marginBottom: '20px',
+  },
+  codeInputs: {
+    display: 'flex',
+    gap: '8px',
+    justifyContent: 'center',
+    marginTop: '10px',
+  },
+  codeInput: {
+    width: '45px',
+    height: '45px',
+    textAlign: 'center',
+    fontSize: '24px',
+    fontWeight: 'bold',
+    backgroundColor: '#ffffff',
+    border: 'inset 2px #808080',
+    fontFamily: '"Courier New", monospace',
+    outline: 'none',
+  },
+  statusBar: {
+    background: '#c0c0c0',
+    borderTop: 'inset 1px #808080',
+    padding: '3px 6px',
+    display: 'flex',
+    justifyContent: 'space-between',
+    fontSize: '11px',
+    color: '#000',
+    fontFamily: '"Microsoft Sans Serif", monospace',
+  },
+  statusText: {
+    fontStyle: 'italic',
+  },
+  statusTime: {
+    fontFamily: '"Courier New", monospace',
+  },
 };
